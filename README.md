@@ -101,7 +101,7 @@ All plots are saved in `./results/diff_analysis`.
 
 # Updates:
 ## Filtering data:
-· Code optimization
+· Code optimization.  
 · Function starts plotting some statistics, so the user chooses to remove cells with <(`input user 1`) counts, and downsample cells with >(`input user 2`) counts to <=(`ìnput user 2`) counts.  
 · Batch effect correction (function needs a new argument called batch_nums) by a downsampling factor (`input user 3`).  
 · Working only with the 20% most variable genes.  
