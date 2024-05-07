@@ -92,7 +92,7 @@ Use returned_dict[variant].results_df to display results.
 pseq.plot_dea(result_dict):
 # result_dict is the dict obtained from the diff_analysis() function
 ```
-All plots are saved `in ./results/diff_analysis`.  
+All plots are saved in `./results/diff_analysis`.  
 
 
 # Analysis pipeline:
@@ -116,7 +116,7 @@ Find in the folder 'example' of this repository the Jupyter Notebook `perturbseq
 Find in the examples folders of this repository the Jupyter Notebook `perturbseq_example.ipynb`.
 It executes all functions of `perturbseq_analysis.py` with data recovered from the study
 'Massively parallel phenotyping of coding variants in cancer with Perturb-seq' (https://doi.org/10.1038/s41587-021-01160-7).
-All expected outputs are saved in `example/results` folder, except AnnData objects from checkpoints (too big).
+All expected outputs are saved in `example*/results` folder, except AnnData objects from checkpoints (too big).
 All expected outputs are saved in `./results` folder, except AnnData objects from checkpoints (∼3GB).  
 
 
