@@ -1,5 +1,4 @@
-import os 
-import os 
+import os
 import time
 import numpy as np
 import pandas as pd
@@ -7,7 +6,6 @@ import scanpy as sc
 import pickle as pkl
 import matplotlib.pyplot as plt
 from gprofiler import GProfiler
-from scipy.stats import ttest_ind
 from goatools.obo_parser import GODag
 from goatools.base import download_go_basic_obo
 from goatools.base import download_ncbi_associations
@@ -18,42 +16,86 @@ from pydeseq2.default_inference import DefaultInference
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.ds import DeseqStats
 
-def filter_data(matrix, var_names, obs_names, mt_names):       # matrix is a dataframe whose head and index are genes and cells, respectively,
-    """Filtering data; check comments below"""                 # var_names is a list containing the genes (HGNC nomenclature) assigned to each column,
-    start_time = time.time()                                   # obs_names is a list containing the variants assigned to each cell (row),
-    if not os.path.exists('./results'): os.mkdir('./results')  # and mt_names is a list containing the mitochondrial genes names
+def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # matrix is a dataframe whose head and index are genes and cells, respectively,
+    """Filtering data; check comments below"""                             # var_names is a list containing the genes (columns) names (HGNC nomenclature),
+    start_time = time.time()                                               # obs_names is a list containing the variants assigned to each cell (row),
+    if not os.path.exists('./results'): os.mkdir('./results')              # mt_names is a list containing the mitochondrial genes names,
+                                                                           # and batch_nums is a list containing the batches that each cell belongs to
 
     # Checking parameters                                 
     if matrix.shape[0] != len(obs_names): raise ValueError('Number of rows in matrix does not match the length of variants list')
     if matrix.shape[1] != len(var_names): raise ValueError('Number of columns in matrix does not match the length of genes list')
+    if matrix.shape[0] != len(obs_names): raise ValueError('Number of rows in matrix does not match the length of batch annotation list')
+    if len(set(matrix.dtypes)) != 1 or 'int64' not in list(set(matrix.dtypes)): raise ValueError('Matrix can only contain integer numbers')
 
-    # Filtering matrix
-    total_counts = list(matrix.sum(1))
-    matrix = matrix.iloc[[index for index, count in enumerate(total_counts) if count > 7000], :]      # Filtering cells with <7000 counts
-    obs_names = [variant for index, variant in enumerate(obs_names) if index in matrix.index]         # Updating variants list
-    matrix = matrix.reset_index(drop=True)
+    # Creating metadata
+    print('Generating metadata...')
+    obs_meta = pd.DataFrame(index = range(len(matrix.index)))
+    obs_meta['obs_names'] = obs_names
+    obs_meta['total_counts'] = list(matrix.sum(axis=1))
+    obs_meta['n_genes_counts'] = list(matrix.astype(bool).sum(axis=1))
+    obs_meta['batch'] = batch_nums
+    mt_found = [mt for mt in mt_names if mt in list(var_names)]
     matrix.columns = var_names
-    mt_genes_found = [mt_name for mt_name in mt_names if mt_name in list(var_names)]                  # Finding mitochondrial genes in matrix
-    mt_counts = list(matrix[mt_genes_found].sum(1))
-    pct_mt_counts = [(i / j) * 100 for i, j in zip(mt_counts, total_counts)]
-    matrix = matrix.iloc[[index for index, count in enumerate(pct_mt_counts) if count < 20], :]       # Filtering cells with >20% mitochondrial counts
-    total_counts = list(matrix.sum(1))                                                                # Updating total counts, variants list, and % mito counts
-    obs_names, pct_mt_counts = zip(*[(tuple[0], tuple[1]) for index, tuple in enumerate(zip(obs_names, pct_mt_counts)) if index in matrix.index])
-    matrix = matrix.reset_index(drop=True)
+    obs_meta['mt_counts'] = pd.Index(matrix[mt_found].sum(axis=1))
+    obs_meta['pct_mt_counts'] = round(obs_meta['mt_counts'] / obs_meta['total_counts'] * 100, 2)
+    var_meta = pd.DataFrame(index = range(len(matrix.columns)))
+    var_meta['var_names'] = var_names
+    
+    # Setting rules to filter
+    adata = sc.AnnData(matrix)
+    adata.var = var_meta
+    adata.obs = obs_meta
+    sc.pl.scatter(adata, x='total_counts', y='n_genes_counts')
+    try:
+        min_count = int(input('Introduce the minimum number of counts that cells must have: '))
+        max_count = int(input('Introduce the maximum number of counts that cells must have: '))
+        batch_max = int(input('Introduce the median number of counts that batches must have: '))
+    except: print('Not a valid input!')
+
+    # Downsampling cells with an unusually high sequencing depth
+    print('Downsampling cells with >%i counts...' % max_count)
+    sc.pp.downsample_counts(adata, counts_per_cell=max_count)
+    matrix = pd.DataFrame(adata.X)
+
+    # Downsampling batches so they have the same median
+    print('Downsampling batches...')
+    for batch, batch_median in enumerate(obs_meta.groupby(obs_meta['batch'])['total_counts'].median()):
+        if batch_median > batch_max:
+            batch_factor = batch_max / batch_median
+            matrix.loc[obs_meta['batch'] == batch] = (matrix.loc[obs_meta['batch'] == batch] * batch_factor).astype(int)
+    obs_meta['total_counts'] = matrix.sum(axis=1)
 
     # Creating AnnData
     adata = sc.AnnData(matrix)
-    adata.var['var_names'] = list(var_names)
-    adata.obs['obs_names'] = list(obs_names)
-    adata.obs['total_counts'] = list(total_counts)
-    adata.obs['pct_mt_counts'] = list(pct_mt_counts)
-    adata.obs['n_genes_counts'] = list(matrix.astype(bool).sum(axis=1))
-
+    adata.var = var_meta
+    adata.obs = obs_meta
+    
+    # Filtering cells with <7000 counts
+    print('Filtering cells with <%i counts...' % min_count)
+    adata = adata[adata.obs['total_counts'] > min_count]
+    adata.obs.reset_index(drop=True, inplace=True)
+    
+    # Filtering cells with >20% mitochondrial counts
+    print('Filtering cells with >20% mitochondrial counts...')
+    adata = adata[adata.obs['pct_mt_counts'] < 20]
+    adata.obs.reset_index(drop=True, inplace=True)
+    
     # Filtering AnnData
-    sc.pp.filter_cells(adata, min_genes=200)                # Filtering cells with <200 genes
-    sc.pp.filter_genes(adata, min_cells=3)                  # Filtering genes present in <3 cells
-    sc.pl.highest_expr_genes(adata, n_top=20, save='.png')  # Plotting 20 most highly variable genes
-    sc.pp.downsample_counts(adata, counts_per_cell=50000)   # Downsampling cells with >50,000 counts to <=50,000 counts
+    print('Filtering cells with <200 genes')
+    sc.pp.filter_cells(adata, min_genes=200)
+
+    # Filtering genes present in <3 cells
+    print('Filtering genes present in <3 cells')
+    sc.pp.filter_genes(adata, min_cells=3)
+
+    # Filtering 80% lowest variable genes
+    print('Filtering 80% lowest variable genes')
+    adata.var.index = list(adata.var['var_names'])
+    sc.pl.highest_expr_genes(adata, n_top=20, save='.png')
+    sc.pp.highly_variable_genes(adata, n_top_genes=int(len(adata.var.index) * 0.2), flavor='seurat_v3', inplace=True)
+    adata = adata[:,adata.var['highly_variable']]
+    adata.var.reset_index(drop=True, inplace=True)
 
     # Plotting
     sc.pl.scatter(adata, x='total_counts', y='pct_mt_counts', save = '1.png')
@@ -76,7 +118,7 @@ def louvain_cells(adata):  # adata is the AnnData object obtained from filter_da
     start_time = time.time()
 
     # Louvain clustering
-    sc.pp.neighbors(adata, n_neighbors=5)
+    sc.pp.neighbors(adata)
     sc.tl.louvain(adata, key_added='louvain')
     sc.tl.umap(adata)
     sc.pl.umap(adata, color=['louvain'], s=1, save = '.png')
@@ -112,13 +154,16 @@ def louvain_genes(adata):  # adata is the AnnData object obtained from previous 
     
     # Transpose and clustering
     adata = adata.transpose()
-    sc.pp.neighbors(adata, n_neighbors=5)
+    sc.pp.neighbors(adata)
     sc.tl.louvain(adata, key_added='louvain')
     sc.tl.umap(adata)
     sc.pl.umap(adata, color=['louvain'], s=5, save = '.png')
     os.system('mv ./figures/umap.png ./results/louvain_genes.png')
     os.system('rm -r ./figures')
+    display(adata.var['louvain'].value_counts())
 
+    with open('./results/louvain_data.pkl', 'wb') as file:
+        pkl.dump(adata.transpose(), file)
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
     return adata.transpose()  # adata is an AnnData object obtained from louvain clustering
 
@@ -149,7 +194,7 @@ def path_gprofiler(adata, mart):  # adata is the AnnData object obtained from lo
 
 
 def path_goatools(adata, entrez):  # adata is the AnnData object obtained from louvain_genes function,
-                                     # and entrez is a txt obtained from NCBI mapping (https://pubchem.ncbi.nlm.nih.gov/upload/tools/)
+                                   # and entrez is a txt obtained from NCBI mapping (https://pubchem.ncbi.nlm.nih.gov/upload/tools/)
     """Pathway enrichment analysis with goatools library"""
     start_time = time.time()
 
