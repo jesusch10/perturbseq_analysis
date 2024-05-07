@@ -4,7 +4,9 @@ Using network diffusion algorithms, such as the Diffuse tool in Cytoscape, it is
 
 This analysis pipeline also contains a Python implementation (`perturbseq_analysis.py`) to incorporate additional features such as data filtering, clustering, and pathway annotation with a Python implementation for analysing raw counts matrices obtained from any perturb-seq experiment.  
 
-*Check the analysis pipeline image below to know the development status of this project.
+*Check the analysis pipeline image below to know the development status of this project.  
+
+
 # Functions
 ```
 import perturbseq_analysis as pseq
@@ -18,7 +20,8 @@ import perturbseq_analysis as pseq
   - [Using the gprofiler library](#Using-the-gprofiler-library)
   - [Using the goatools library](#Using-the-goatools-library)
 - [Differential expression analysis (DEA)](#Differential-expression-analysis-DEA)
-  - [Plotting DEA results](#Plotting-DEA-results)
+  - [Plotting DEA results](#Plotting-DEA-results)  
+
 ## Filtering data:
 · Plotting some raw statistics (so the user can decide some filters) and later the 20% most highly variable genes (also saved in `./results`).  
 · Removing cells with <(`input user 1`) counts, cells with >20% mitochondrial counts, cells with <200 genes, genes present in <3 cells, and 80% lowest variable genes.  
@@ -32,13 +35,15 @@ adata = pseq.filter_data(matrix, var_names, obs_names, mt_names, batch_nums):
 # mt_names is a list containing the mitochondrial genes names,
 # and batch_nums is a list containing the batches that each cell belongs to
 ```
-It returns an AnnData object with data filtered (CHECKPOINT: also saved in `./results`).
+It returns an AnnData object with data filtered (CHECKPOINT: also saved in `./results`).  
+
 ## UMAP by variants:
 Plot UMAP of each variant against the wild type (WT) (all also saved in `./results/var_umap`).
 ```
 pseq.var_umap(adata)
 # adata is the AnnData object obtained from any of the previous functions
 ```
+
 ## Louvain clustering:
 ### Clustering by cells:
 It displays a UMAP plot with louvain clusters, and dataframe with the variant presence (%) in each louvain group (also both saved in `./results`).
@@ -46,14 +51,16 @@ It displays a UMAP plot with louvain clusters, and dataframe with the variant pr
 adata = pseq.louvain_cells(adata)
 # adata is the AnnData object obtained from filter_data() or louvain_genes() functions
 ```
-It returns an AnnData object obtained from louvain clustering.
+It returns an AnnData object obtained from louvain clustering.  
+
 ### Clustering by genes:
 It displays a UMAP plot with louvain clusters (also saved in `./results`).
 ```
 adata = pseq.louvain_genes(adata)
 # adata is the AnnData object obtained from filter_data() or louvain_cells() functions
 ```
-It returns an AnnData object obtained from louvain clustering (CHECKPOINT: also saved in `./results`).
+It returns an AnnData object obtained from louvain clustering (CHECKPOINT: also saved in `./results`).  
+
 ## Pathway enrichment analysis:
 ### Using the gprofiler library:
 ```
@@ -61,14 +68,16 @@ gprofiler_df = pseq.path_gprofiler(adata, mart):
 # adata is the AnnData object obtained from louvain_genes() function,
 # and mart is a txt obtained from ensembl mapping (retrieve the genes ID with BioMart)
 ```
-It returns a dataframe with pathways annotations of each louvain cluster (also saved in `./results`).
+It returns a dataframe with pathways annotations of each louvain cluster (also saved in `./results`).  
+
 ### Using the goatools library:
 ```
 goatools_df = pseq.path_goatools(adata, entrez):
 # adata is the AnnData object obtained from louvain_genes function,
 # and entrez is a txt obtained from NCBI mapping (https://pubchem.ncbi.nlm.nih.gov/upload/tools/)
 ```
-It return dataframe with pathways annotations of each louvain cluster (also saved in `./results`).
+It return dataframe with pathways annotations of each louvain cluster (also saved in `./results`).  
+
 ## Differential expression analysis (DEA):
 DEA with the library PyDESeq2, a Python implementation of the DESeq2 method in R.
 ```
@@ -76,23 +85,30 @@ result_dict = pseq.diff_analysis(adata):
 # adata is the AnnData object obtained from any of the previous functions
 ```
 It returns a dict: keys are variants and values are DEA results with regards to WT (CHECKPOINT: also saved in `./results/diff_analysis`).
-Use returned_dict[variant].results_df to display results.
+Use returned_dict[variant].results_df to display results.  
+
 ### Plotting DEA results:
 ```
 pseq.plot_dea(result_dict):
 # result_dict is the dict obtained from the diff_analysis() function
 ```
-All plots are saved `in ./results/diff_analysis`.
+All plots are saved `in ./results/diff_analysis`.  
+
+
 # Analysis pipeline:
-![Analysis pipeline](analysis_pipeline.png)
+![Analysis pipeline](analysis_pipeline.png)  
+
+
 # Updates:
 ## Filtering data:
 · Code optimization
-· Function starts plotting some statistics, so the user chooses to remove cells with <(`input user 1`) counts, and downsample cells with >(´input user 2´) counts to <=(`ìnput user 2`) counts.  
-· Batch effect correction (function needs a new argument called batch_nums).  
-· Working only with the 20% most variable genes.
+· Function starts plotting some statistics, so the user chooses to remove cells with <(`input user 1`) counts, and downsample cells with >(`input user 2`) counts to <=(`ìnput user 2`) counts.  
+· Batch effect correction (function needs a new argument called batch_nums) by a downsampling factor (`input user 3`).  
+· Working only with the 20% most variable genes.  
+
 ## Louvain clustering:
-· The size of local neighborhood used for manifold approximation (and then louvain clustering) is set to 15 (default in Scanpy library).
+· The size of local neighborhood used for manifold approximation (and then louvain clustering) is set to 15 (default in Scanpy library).  
+
 
 # Example:
 
@@ -101,7 +117,7 @@ Find in the examples folders of this repository the Jupyter Notebook `perturbseq
 It executes all functions of `perturbseq_analysis.py` with data recovered from the study
 'Massively parallel phenotyping of coding variants in cancer with Perturb-seq' (https://doi.org/10.1038/s41587-021-01160-7).
 All expected outputs are saved in `example/results` folder, except AnnData objects from checkpoints (too big).
-All expected outputs are saved in `./results` folder, except AnnData objects from checkpoints (∼3GB).
+All expected outputs are saved in `./results` folder, except AnnData objects from checkpoints (∼3GB).  
 
 
 # Requirements
