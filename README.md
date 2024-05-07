@@ -1,6 +1,9 @@
 Single-cell RNA sequencing (scRNA-seq) data from perturb-seq experiments aims to investigate the functional impact of genetic variants in cancer. However, the phenotypic impact is complex and may not result in distinct clusters. Instead, the functional impact may manifest as a spectrum of gene expression changes. Therefore, closer relationships between interconnected genes in molecular networks must be prioritized.  
+
 Using network diffusion algorithms, such as the Diffuse tool in Cytoscape, it is possible to propagate biological signals or information across gene interaction networks derived from the perturb-seq data. By analysing the diffusion scores or signal propagation patterns, the goal is to identify pairs of genes that exhibit closer relationships or functional associations, providing insights into gene function, regulatory mechanisms, and disease pathways.  
+
 This analysis pipeline also contains a Python implementation (`perturbseq_analysis.py`) to incorporate additional features such as data filtering, clustering, and pathway annotation with a Python implementation for analysing raw counts matrices obtained from any perturb-seq experiment.  
+
 *Check the analysis pipeline image below to know the development status of this project.
 # Functions
 ```
@@ -17,10 +20,10 @@ import perturbseq_analysis as pseq
 - [Differential expression analysis (DEA)](#Differential-expression-analysis-DEA)
   - [Plotting DEA results](#Plotting-DEA-results)
 ## Filtering data:
-· Plotting some statistics (so the user can decide some filters) as the 20 most highly variable genes (all also saved in `./results`).  
+· Plotting some raw statistics (so the user can decide some filters) and later the 20% most highly variable genes (also saved in `./results`).  
 · Removing cells with <(`input user 1`) counts, cells with >20% mitochondrial counts, cells with <200 genes, genes present in <3 cells, and 80% lowest variable genes.  
 · Downsampling cells with >(`input user 2`) counts to <=(`ìnput user 2`) counts.  
-· Batch effect correction, and total counts per cell normalization.
+· Batch effect correction by a downsampling factor (`input user 3`).
 ```
 adata = pseq.filter_data(matrix, var_names, obs_names, mt_names, batch_nums):
 # matrix is a dataframe with raw counts whose head and index are genes and cells, respectively,
@@ -81,12 +84,12 @@ pseq.plot_dea(result_dict):
 ```
 All plots are saved `in ./results/diff_analysis`.
 # Analysis pipeline:
-![Analysis pipeline](pipeline_script.png)
+![Analysis pipeline](analysis_pipeline.png)
 # Updates:
 ## Filtering data:
+· Code optimization
 · Function starts plotting some statistics, so the user chooses to remove cells with <(`input user 1`) counts, and downsample cells with >(´input user 2´) counts to <=(`ìnput user 2`) counts.  
 · Batch effect correction (function needs a new argument called batch_nums).  
-· Total counts per cell normalization.  
 · Working only with the 20% most variable genes.
 ## Louvain clustering:
 · The size of local neighborhood used for manifold approximation (and then louvain clustering) is set to 15 (default in Scanpy library).
