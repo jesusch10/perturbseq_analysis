@@ -232,21 +232,17 @@ def diff_analysis(adata):  # adata is the AnnData object obtained from previous 
     
     # Defining variables
     result_dict = {}
-    matrix = pd.DataFrame(adata.X)
-    matrix.columns = adata.var['var_names']
-    # adata.obs.index = range(len(adata.obs.index))
-    matrix.index = adata.obs.index
+    inference = DefaultInference()
     if not os.path.exists('./results/diff_analysis'): os.mkdir('./results/diff_analysis')
     
     for variant in set(adata.obs['obs_names']):
-        if variant != 'WT' and variant != 'Null':
+        if variant not in ['WT', 'Null']:
             # Selecting variants
-            matrix_temp = matrix[(adata.obs['obs_names'] == 'WT') | (adata.obs['obs_names'] == variant)].reset_index(drop=True)
-            obs_temp = adata.obs[(adata.obs['obs_names'] == 'WT') | (adata.obs['obs_names'] == variant)].reset_index(drop=True)
+            adata_temp = adata[adata.obs['obs_names'].isin(['WT', variant])]
+            adata_temp.obs.reset_index(drop=True, inplace=True)
         
             # Initializing read counts modeling
-            inference = DefaultInference(n_cpus=8)
-            dds = DeseqDataSet(counts=matrix_temp, metadata=obs_temp, design_factors='obs_names', refit_cooks=True, inference=inference)
+            dds = DeseqDataSet(counts=pd.DataFrame(adata_temp.X, columns = adata.var['var_names']), metadata=adata_temp.obs, design_factors='obs_names', refit_cooks=True, inference=inference)
             dds.deseq2()                                     # Fitting dispersions and log fold changes
         
             # Statistical analysis
@@ -258,12 +254,15 @@ def diff_analysis(adata):  # adata is the AnnData object obtained from previous 
         pkl.dump(result_dict, file)
     print('Display results of each variant vs WT doing returned_dict[variant].results_df')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return result_dict  # result_dict is a dict: keys are variants and values are DEA results with regards to WT:
+    return result_dict  # result_dict is a dict: keys are variants and values are DEA results with regards to WT
 
 def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_analysis function
-    """Plotting the DEA"""
+    """Plotting the DEA, filtering variants with no differentially expressed genes, and saving info only about LFC"""
     start_time = time.time()
+    filtered_dict = {}
     for variant in adata_dict.keys():
+
+        # Plotting
         stat_res = adata_dict[variant]
         stat_res.plot_MA(s=5)
        #plt.gcf().set_size_inches(8,6)
@@ -271,5 +270,14 @@ def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_anal
         plt.title(variant + '_WT')
         plt.tight_layout()
         plt.savefig('./results/diff_analysis/' + variant + '_WT.png', dpi=150)
-    print('For a higher resolution of a particular variant, type returned_dict[variant].plot_MA(s=5)')
+        
+        # Filtering adata
+        temp_df = stat_res.results_df[adata_dict[variant].results_df['padj'] < 0.05]['log2FoldChange'].to_frame()
+        if len(temp_df) > 0:
+            filtered_dict[variant] = temp_df
+
+    with open('./results/diff_analysis/diff_filtered.pkl', 'wb') as file:
+        pkl.dump(filtered_dict, file)
+    print('For a higher resolution plot of a particular variant, type returned_dict[variant].plot_MA(s=5)')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return filtered_dict  # filtered_dict is a dict: keys are variants and values are differential expressed genes with their LFC values
