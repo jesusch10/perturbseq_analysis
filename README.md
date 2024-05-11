@@ -84,7 +84,7 @@ DEA with the library PyDESeq2, a Python implementation of the DESeq2 method in R
 result_dict = pseq.diff_analysis(adata):
 # adata is the AnnData object obtained from any of the previous functions
 ```
-It returns a dict: keys are variants and values are DEA results with regards to WT. Use returned_dict[variant].results_df to display results.  
+It returns a dict: keys are variants and values are DEA results with regards to WT. Use `returned_dict[variant].results_df` to display results.  
 
 ### Plotting DEA results:
 ```
