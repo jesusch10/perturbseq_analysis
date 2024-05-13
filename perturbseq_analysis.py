@@ -257,9 +257,9 @@ def diff_analysis(adata):  # adata is the AnnData object obtained from previous 
     return result_dict  # result_dict is a dict: keys are variants and values are DEA results with regards to WT
 
 def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_analysis function
-    """Plotting the DEA, filtering variants with no differentially expressed genes, and saving info only about LFC"""
+    """Plotting the DEA, and saving info only about LFC and p values"""
     start_time = time.time()
-    filtered_dict = {}
+    result_df = pd.DataFrame()
     for variant in adata_dict.keys():
 
         # Plotting
@@ -271,13 +271,11 @@ def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_anal
         plt.tight_layout()
         plt.savefig('./results/diff_analysis/' + variant + '_WT.png', dpi=150)
         
-        # Filtering adata
-        temp_df = stat_res.results_df[adata_dict[variant].results_df['padj'] < 0.05]['log2FoldChange'].to_frame()
-        if len(temp_df) > 0:
-            filtered_dict[variant] = temp_df
+        # Saving
+        result_df = pd.concat([result_df, stat_res.results_df[['log2FoldChange', 'padj']].rename(columns={'log2FoldChange': 'LFC_' + variant, 'padj': 'padj_' + variant})], axis=1)
 
-    with open('./results/diff_analysis/diff_filtered.pkl', 'wb') as file:
-        pkl.dump(filtered_dict, file)
+    result_df.fillna(1, inplace=True)  # Set NaN values in p value columns to 1
+    result_df.to_csv('./results/diff_analysis/diff_analysis.csv')
     print('For a higher resolution plot of a particular variant, type returned_dict[variant].plot_MA(s=5)')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
     return filtered_dict  # filtered_dict is a dict: keys are variants and values are differential expressed genes with their LFC values
