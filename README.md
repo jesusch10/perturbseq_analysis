@@ -101,7 +101,7 @@ It returns a dict (CHECKPOINT: also saved in `./results/diff_analysis/diff_filte
 # Updates:
 ## Plotting DEA results:
 · Checkpoint added while removed in diff_analysis() function.  
-· Filtering variants with no differentially expressed genes, and saving info only about LFC.  
+· Saving info only about LFC and p values.  
 
 
 # Example:
