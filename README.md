@@ -20,7 +20,11 @@ import perturbseq_analysis as pseq
   - [Using the gprofiler library](#Using-the-gprofiler-library)
   - [Using the goatools library](#Using-the-goatools-library)
 - [Differential expression analysis (DEA)](#Differential-expression-analysis-DEA)
-  - [Plotting DEA results](#Plotting-DEA-results)  
+  - [Plotting DEA results](#Plotting-DEA-results)
+- [Comparing variants expression profiles](#Comparing-variants-expression-profiles)
+  - [Calculating threshold for 5% of FDR](#Calculating-threshold-for-5%-of-FDR)
+  - [Hierarchical dendogram and clustering](#Hierarchical-dendogram-and-clustering)
+- [Merging LFC info per cluster](#Merging-LFC-info-per-cluster)
 
 ## Filtering data:
 · Plotting some raw statistics (so the user can decide some filters) and later the 20% most highly variable genes (also saved in `./results/`).  
@@ -88,20 +92,47 @@ It returns a dict: keys are variants and values are DEA results with regards to 
 
 ### Plotting DEA results:
 ```
-result_dict = pseq.plot_dea(result_dict):
+lfc_df, padj_df = pseq.plot_dea(result_dict):
 # result_dict is the dict obtained from the diff_analysis() function
 ```
-It returns a dict (CHECKPOINT: also saved in `./results/diff_analysis/diff_filtered.pkl`) whose keys are variants with differentially expressed genes and whose values are differential expressed genes with their LFC values. All plots are saved in `./results/diff_analysis/`.  
+It returns two dataframes  (CHECKPOINT: both also saved in `./results/diff_analysis/`) containing LFC and corrected p-values info, respectively. All plots are saved in `./results/diff_analysis/`.  
 
+## Comparing variants expression profiles:
+Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and reference group, and deriving an empirical null distribution of those scores.
+```
+adata, result_df, permuted_df = pseq.compare_groups(adata, reference)
+# adata is the AnnData object obtained from any of the previous functions
+```
+It returns an AnnData object with z-scores, and the rest are both dataframes of metric scores calculated for each variant VS reference group, and as null distribution.  
+
+### Calculating threshold for 5% of FDR:
+```
+result_df = pseq.compute_fdr(result_df, permuted_df)
+# both arguments are dataframes obtained from compare_groups() function
+```
+It returns the same dataframe with new columns about FDR.  
+
+### Hierarchical dendogram and clustering:
+Based on Pearson scores and visual inspection (changing the threshold), respectively.
+```
+result_df = pseq.plot_dendogram(result_df, threshold)
+# result_df is the dataframe obtained from compare_groups() or compute_fdr() function, and threshold is a float number.
+```
+It returns the same dataframe with a new column indicating the cluster each variant belongs to.  
+
+## Merging LFC info per cluster:
+Creating CSV for Cytoscape with LFC info from significant genes appearing in all variants of the same cluster.
+```
+pseq.flc_cluster(lfc_df, padj_df, scoring_df)
+# result_df is the dataframe obtained from plot_dendogram() function
+```   
 
 # Analysis pipeline:
 ![Analysis pipeline](analysis_pipeline.png)  
 
 
 # Updates:
-## Plotting DEA results:
-· Checkpoint added while removed in diff_analysis() function.  
-· Saving info only about LFC and p values.  
+· New functions: compare_groups(), compute_fdr(), and flc_cluster()  
 
 
 # Example:
@@ -121,6 +152,7 @@ List of packages versions used:
 - numpy 1.26.4
 - pandas 2.2.2
 - scanpy 1.10.1
+- seaborn 0.13.2
 - pickle 3.12.3
 - matplotlib 3.8.4
 - gprofiler 1.2.2
