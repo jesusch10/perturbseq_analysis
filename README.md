@@ -22,7 +22,7 @@ import perturbseq_analysis as pseq
 - [Differential expression analysis (DEA)](#Differential-expression-analysis-DEA)
   - [Plotting DEA results](#Plotting-DEA-results)
 - [Comparing variants expression profiles](#Comparing-variants-expression-profiles)
-  - [Calculating threshold for 5% of FDR](#Calculating-threshold-for-5%-of-FDR)
+  - [Calculating threshold for 5% of FDR](#Calculating-threshold-for-5-of-FDR)
   - [Hierarchical dendogram and clustering](#Hierarchical-dendogram-and-clustering)
 - [Merging LFC info per cluster](#Merging-LFC-info-per-cluster)
 
