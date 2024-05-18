@@ -110,7 +110,7 @@ It returns an AnnData object with z-scores, and the rest are both dataframes of 
 result_df = pseq.compute_fdr(result_df, permuted_df)
 # both arguments are dataframes obtained from compare_groups() function
 ```
-It returns the same dataframe with new columns about FDR.  
+It returns the same dataframe with new columns about FDR. All plots are saved in `./results/`.
 
 ### Hierarchical dendogram and clustering:
 Based on Pearson scores and visual inspection (changing the threshold), respectively.
