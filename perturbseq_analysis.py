@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 import pickle as pkl
+import seaborn as sns
 import matplotlib.pyplot as plt
 from gprofiler import GProfiler
 from goatools.obo_parser import GODag
@@ -15,6 +16,8 @@ from goatools.goea.go_enrichment_ns import GOEnrichmentStudyNS
 from pydeseq2.default_inference import DefaultInference
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.ds import DeseqStats
+from scipy.cluster import hierarchy
+
 
 def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # matrix is a dataframe whose head and index are genes and cells, respectively,
     """Filtering data; check comments below"""                             # var_names is a list containing the genes (columns) names (HGNC nomenclature),
@@ -259,7 +262,8 @@ def diff_analysis(adata):  # adata is the AnnData object obtained from previous 
 def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_analysis function
     """Plotting the DEA, and saving info only about LFC and p values"""
     start_time = time.time()
-    result_df = pd.DataFrame()
+    lfc_df = pd.DataFrame()
+    padj_df = pd.DataFrame()
     for variant in adata_dict.keys():
 
         # Plotting
@@ -272,10 +276,219 @@ def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_anal
         plt.savefig('./results/diff_analysis/' + variant + '_WT.png', dpi=150)
         
         # Saving
-        result_df = pd.concat([result_df, stat_res.results_df[['log2FoldChange', 'padj']].rename(columns={'log2FoldChange': 'LFC_' + variant, 'padj': 'padj_' + variant})], axis=1)
-
-    result_df.fillna(1, inplace=True)  # Set NaN values in p value columns to 1
-    result_df.to_csv('./results/diff_analysis/diff_analysis.csv')
+        lfc_df[variant] = stat_res.results_df['log2FoldChange']
+        padj_df[variant] = stat_res.results_df['padj']
+    
+    lfc_df.fillna(0, inplace=True)  # Set NaN values in LFC dataframe to 0
+    padj_df.fillna(1, inplace=True)  # Set NaN values in p values dataframe to 1
+    lfc_df.to_csv('./results/diff_analysis/diff_lfc.csv')
+    padj_df.to_csv('./results/diff_analysis/diff_padj.csv')
     print('For a higher resolution plot of a particular variant, type returned_dict[variant].plot_MA(s=5)')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return filtered_dict  # filtered_dict is a dict: keys are variants and values are differential expressed genes with their LFC values
+    return lfc_df, padj_df  # both are dataframes containing LFC and corrected p-values info, respectively
+
+
+def compare_groups(adata, reference):  # adata is the AnnData object obtained from filter_data function,
+                                       # reference is a string with the name of the reference group
+    """Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and reference group, and deriving an empirical null distribution of those scores"""
+    start_time = time.time()
+    print('Calculating z-scores...')
+    sc.pp.scale(adata, max_value=10)  # Calculating z-scores
+    print('Calculating first 50 elements in the Principal Component Space...')
+    sc.tl.pca(adata,svd_solver='arpack',n_comps=50)  # Calculating first 50 elements in the Principal Component Space
+    adata.obsm['X_pca'] *= -1
+    result_df = pd.DataFrame(columns = ['reference', 'variant', 'HotellingT2','bulk.pearson','bulk.spearman','bulk.L1'])
+    permuted_df = pd.DataFrame(columns = ['reference', 'variant', 'HotellingT2','bulk.pearson','bulk.spearman','bulk.L1'])
+    
+    # Permuting data
+    adata.obs['obs_permuted'] = list(adata.obs['obs_names'])
+    for permutation in range(10):
+        print('Permutation', permutation)
+        adata.obs['obs_permuted'] = list(adata.obs['obs_permuted'].sample(frac=1, random_state=permutation, ignore_index=True))
+
+        # Calculating metrics
+        index = 0
+        for variant in set(adata.obs['obs_names']):
+            if variant != reference:
+
+                # Retrieving info from selected variants
+                adata_df = pd.DataFrame(adata.X)
+                adata_df.index = adata.obs.index
+                reference_df = adata_df[adata.obs['obs_names'] == reference]
+                variant_df = adata_df[adata.obs['obs_names'] == variant]
+                reference_pmdf = adata_df[adata.obs['obs_permuted'] == reference]
+                variant_pmdf = adata_df[adata.obs['obs_permuted'] == variant]
+            
+                # Converting into bulkified data
+                reference_bulk = np.mean(np.array(reference_df),axis=0)
+                variant_bulk = np.mean(np.array(variant_df),axis=0)
+                reference_pmbulk = np.mean(np.array(reference_pmdf),axis=0)
+                variant_pmbulk = np.mean(np.array(variant_pmdf),axis=0)
+            
+                # Retrieving PCA info for T2 Hotelling method
+                adata_pca = pd.DataFrame(adata.obsm['X_pca']).loc[:,:20]
+                adata_pca.index = adata.obs.index
+                reference_pca = adata_pca[adata.obs['obs_names'] == reference]
+                variant_pca = adata_pca[adata.obs['obs_names'] == variant]
+                reference_pmpca = adata_pca[adata.obs['obs_permuted'] == reference]
+                variant_pmpca = adata_pca[adata.obs['obs_permuted'] == variant]
+            
+                result_list = [reference, variant]
+                permuted_list = [variant, 'permuted_' + variant]
+            
+                # HotellingT2
+                import spm1d
+                T2 = spm1d.stats.hotellings2(reference_pca, variant_pca)
+                result_list.append(T2.z)  # T2 statistic 
+                T2 = spm1d.stats.hotellings2(reference_pmpca, variant_pmpca)
+                permuted_list.append(T2.z)
+            
+                # bulk.pearson
+                from scipy.stats import pearsonr
+                true_value = 1 - pearsonr(reference_bulk, variant_bulk)[0]
+                result_list.append(true_value)
+                permuted_value = 1 - pearsonr(reference_pmbulk, variant_pmbulk)[0]
+                permuted_list.append(permuted_value)
+                
+                # bulk.spearman
+                from scipy.stats import spearmanr
+                true_value = 1 - spearmanr(reference_bulk, variant_bulk)[0]
+                result_list.append(true_value)
+                permuted_value = 1 - spearmanr(reference_pmbulk, variant_pmbulk)[0]
+                permuted_list.append(permuted_value)
+                        
+                # bulk.L1
+                true_value = np.sum(np.abs(reference_bulk - variant_bulk)) * 1.0 / reference_df.shape[1]
+                result_list.append(true_value)
+                permuted_value = np.sum(np.abs(reference_pmbulk - variant_pmbulk)) * 1.0 / reference_df.shape[1]
+                permuted_list.append(permuted_value)
+                
+                result_df.loc[index], permuted_df.loc[index] = result_list, permuted_list
+                index += 1
+
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return(adata, result_df, permuted_df)  # adata is an AnnData object with z-scores, and the rest are both dataframes of metric scores calculated for each variant VS reference group, and as null distribution
+
+
+def compute_fdr(result_df, permuted_df):  # both arguments are dataframes obtained from compare_groups() function
+    """Calculating the threshold for each method as 5% of desired FDR"""
+    start_time = time.time()
+    result_df['dataset'] = 'true'
+    permuted_df['dataset'] = 'permuted'
+    combo_df = pd.concat([result_df, permuted_df])
+    min_fdr = 1.0 / combo_df.shape[0]
+    for method in ['HotellingT2', 'bulk.pearson', 'bulk.spearman', 'bulk.L1']:
+        combo_df = combo_df.sort_values(by=method,ascending=False)
+        combo_df['FDR_' + method] = 1
+        combo_df = combo_df.reset_index(drop=True)
+
+        # Calculating FDR
+        for i in range(combo_df.shape[0]):
+            value = float(combo_df.loc[i, method])
+            passed = combo_df[combo_df[method] >= value]
+            true_fraction = np.sum(passed['dataset'] == 'true') / result_df.shape[0]
+            perm_fraction = np.sum(passed['dataset'] == 'permuted') / permuted_df.shape[0]
+            fdr = max(float(perm_fraction / (true_fraction + perm_fraction)), float(min_fdr))       
+            combo_df.loc[i,'FDR_' + method] = float(fdr)
+        
+        # Plotting
+        NUM_BINS=20
+        max_val = np.max(combo_df[method])
+        mybins=[x * max_val / NUM_BINS for x in range(NUM_BINS)]
+        true_scores = combo_df.loc[combo_df['dataset'] == 'true', method]
+        perm_scores = combo_df.loc[combo_df['dataset'] == 'permuted', method]
+        plt.hist(true_scores, color='red', bins=mybins, label='Real data')
+        plt.hist(perm_scores, color='black', alpha=0.5, bins=mybins, weights=[len(true_scores)/len(perm_scores)]*len(perm_scores), label='Permuted data')
+        plt.grid(False)
+        plt.xlabel(method)
+        plt.ylabel('Frequency')
+
+        # Defining threshold
+        result_df = combo_df.loc[combo_df['dataset'] == 'true']
+        fdr_passed = result_df[result_df['FDR_' + method] <= 0.01].sort_values(by=method,ascending=True)
+        thresh = float(list(fdr_passed[method])[0])
+        
+        plt.axvline(x=thresh,color='black',linestyle='dotted')
+        plt.title('FDR 0.01 - Threshold %.2f' % thresh)
+        plt.legend()
+        plt.savefig('./results/fdr_%s.png' % method, dpi=150)
+        plt.show()
+
+    result_df = combo_df[combo_df['dataset'] == 'true'].drop(columns=['dataset']).reset_index(drop=True)
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return result_df
+
+
+def plot_dendogram(result_df, threshold):  # result_df is the dataframe obtained from either compare_groups() or compute_fdr() functions
+                                           # threshold is a float number to set the number of cluster in the dendogram
+    """Hierarchical dendogram based on Pearson scores, and hierarchical clustering based on visual inspection changing the threshold parameter"""
+    start_time = time.time()
+    distance_matrix = 1 - result_df['bulk.pearson'].abs().values.reshape(-1, 1)
+    Z = hierarchy.linkage(distance_matrix, method='average')  # Hierarchical clustering
+    
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    dn = hierarchy.dendrogram(Z, labels=list(result_df['variant']), leaf_rotation=90, color_threshold = threshold)  # Generating dendrogram
+    plt.title('Dendrogram')
+    plt.xlabel('Variants')
+    plt.ylabel('Distance')
+    
+    # Highlighting significant variants
+    significant_variants = list(result_df[result_df['HotellingT2'] < 28.48]['variant'])
+    ax = plt.gca()
+    x_labels = ax.get_xmajorticklabels()
+    for label in x_labels:
+        if label.get_text() in significant_variants:
+            label.set_color('red')  # Change this color as needed
+    
+    plt.savefig('./results/scoring_variants.png', dpi=150)
+    plt.show()
+    result_df['cluster'] = hierarchy.fcluster(Z, t=threshold, criterion='distance')
+    result_df.to_csv('./results/scoring_variants.csv')
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return result_df  # result_df now contains a 'cluster' column indicating the group in which the variant is placed
+
+
+def lfc_cluster(lfc_df, padj_df, scoring_df):  # lfc_df is the dataframe with LFC info obtained from plot_dea() function
+                                              # padj_df is the dataframe with corrected p-values obtained from plot_dea() function
+                                              # scoring_df is the dataframe with cluster info obtained from plot_dendogram() function
+    """Creating CSV for Cytoscape with LFC info from significant genes appearing in all variants of the same cluster"""
+    start_time = time.time()
+    for cluster in set(scoring_df['cluster']):
+    
+        # Getting cluster info 
+        print('Cluster %s' % str(cluster))
+        cluster_df = lfc_df[scoring_df['cluster'] == cluster]
+        genes_df = (padj_df < 0.05).loc[cluster_df.index].sum() == len(cluster_df.index)
+        genes_list = list(genes_df[genes_df].index)
+        final_df = lfc_df.loc[cluster_df.index, genes_list]
+    
+        # Plotting data
+        if final_df.shape[1] == 0: print('No significant genes found across all variants. Maybe cluster %s contains variants similar to WT?' % str(cluster))
+        else:
+            condition = '0'
+            while condition == '0':
+                plt.figure(figsize=(10, 6))
+                font_size = min(max(10 - (final_df.shape[0] // 10) - (final_df.shape[1] // 10), 4), 10)
+                sns.heatmap(final_df, annot=True, cmap='coolwarm', center=0, annot_kws={"size": font_size})
+                plt.title('LFC Heatmap of significantly expressed genes appearing in all variants')
+                plt.xlabel('Genes')
+                plt.ylabel('Variants')
+                plt.xticks(fontsize=font_size * 1.2)
+                plt.yticks(fontsize=font_size * 1.2)
+                plt.show()
+        
+                # Filtering variants
+                condition = str(input('Introduce 0 if you want to filter some variants'))
+                if condition == '0':
+                    variants_list = input('Introduce variants names to filter separated by commas:').split(',')
+                    if len(variants_list) != 0:
+                        for variant in variants_list: 
+                            if variant not in final_df.index:
+                                print(variant, 'variant not found')
+                                variants_list.remove(variant)
+                        final_df = final_df.loc[final_df.index.drop(variants_list)]
+    
+            final_df.columns.name = 'genes_names'
+            pd.DataFrame(final_df.mean(), columns = ['lfc_cluster%s' % str(cluster)]).to_csv('./results/lfc_cluster%s.csv' % str(cluster))
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
