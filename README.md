@@ -7,6 +7,10 @@ This analysis pipeline also contains a Python implementation (`perturbseq_analys
 *Check the analysis pipeline image below to know the development status of this project.  
 
 
+# Installation
+Make sure that `perturbseq_analysis.py` and `hotnet` folder are in the same directory as the Jupyter Notebook you shall create to execute the functions.  
+
+
 # Functions
 ```
 import perturbseq_analysis as pseq
@@ -25,6 +29,7 @@ import perturbseq_analysis as pseq
   - [Calculating threshold for 5% of FDR](#Calculating-threshold-for-5-of-FDR)
   - [Hierarchical dendogram and clustering](#Hierarchical-dendogram-and-clustering)
 - [Merging LFC info per cluster](#Merging-LFC-info-per-cluster)
+- [Finding significantly altered subnetworks in each cluster](#Finding-significantly-altered-subnetworks-in-each-cluster)
 
 ## Filtering data:
 · Plotting some raw statistics (so the user can decide some filters) and later the 20% most highly variable genes (also saved in `./results/`).  
@@ -125,24 +130,29 @@ Creating CSV for Cytoscape with LFC info from significant genes appearing in all
 ```
 pseq.flc_cluster(lfc_df, padj_df, scoring_df)
 # result_df is the dataframe obtained from plot_dendogram() function
-```   
+```  
+
+## Finding significantly altered subnetworks in each cluster:
+Implementation of Hierarchical HotNet algorithm (https://doi.org/10.1093/bioinformatics/bty613).
+```
+pseq.hotnet_analysis(nodes_df, edges_df, lfc_df, scoring_df, wt_cluster)
+# nodes_df and edges_df are dataframes containing info about the nodes and edges, respectively, of the constructed network in Cytoscape using STRING.
+# lfc_df and scoring_df are dataframes obtained from plot_dea() and plot_dendogram() functions, respectively.
+# wt_cluster is the integer number referring to the Wild type cluster deduced from plot_dendogram() function.
+```
+It generates one `.txt` file per cluster saved in `./results/hotnet_output/results/` to feed Cytoscape for further functional enrichment.  
+
 
 # Analysis pipeline:
 ![Analysis pipeline](analysis_pipeline.png)  
 
 
 # Updates:
-· New functions: compare_groups(), compute_fdr(), and flc_cluster()  
+· Functions lfc_cluster() and hotnet_analysis() are in conflict.  
 
 
 # Example:
-
-Find in the folder `example*` of this repository the Jupyter Notebook `perturbseq_example.ipynb`.
-Find in the examples folders of this repository the Jupyter Notebook `perturbseq_example.ipynb`.
-It executes all functions of `perturbseq_analysis.py` with data recovered from the study
-'Massively parallel phenotyping of coding variants in cancer with Perturb-seq' (https://doi.org/10.1038/s41587-021-01160-7).
-All expected outputs are saved in `example*/results/` folder, except AnnData objects from checkpoints (too big).
-All expected outputs are saved in `./results/` folder, except AnnData objects from checkpoints (∼3GB).  
+Find in the `example*` folders of this repository the Jupyter Notebook `perturbseq_example.ipynb`. It executes all functions of `perturbseq_analysis.py` with data recovered from the study 'Massively parallel phenotyping of coding variants in cancer with Perturb-seq' (https://doi.org/10.1038/s41587-021-01160-7). All expected outputs are saved in `example*/results/` folder, except AnnData objects from checkpoints (too big). 
 
 
 # Requirements
@@ -159,4 +169,6 @@ List of packages versions used:
 - scipy 1.12.0
 - goatools 1.4.4
 - pydeseq2 0.4.9
+- networkx 3.3
+- h5py 3.11.0
 ```
