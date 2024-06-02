@@ -1,5 +1,6 @@
 import os
 import time
+import copy
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -17,6 +18,9 @@ from pydeseq2.default_inference import DefaultInference
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.ds import DeseqStats
 from scipy.cluster import hierarchy
+import spm1d
+from scipy.stats import pearsonr
+from scipy.stats import spearmanr
 
 
 def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # matrix is a dataframe whose head and index are genes and cells, respectively,
@@ -95,9 +99,15 @@ def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # mat
     # Filtering 80% lowest variable genes
     print('Filtering 80% lowest variable genes')
     adata.var.index = list(adata.var['var_names'])
-    sc.pl.highest_expr_genes(adata, n_top=20, save='.png')
-    sc.pp.highly_variable_genes(adata, n_top_genes=int(len(adata.var.index) * 0.2), flavor='seurat_v3', inplace=True)
-    adata = adata[:,adata.var['highly_variable']]
+
+    adata_copy = copy.deepcopy(adata)
+    sc.pp.normalize_total(adata_copy, target_sum=1e4)
+    sc.pp.log1p(adata_copy)
+    sc.pp.highly_variable_genes(adata_copy, min_mean=0.0125, max_mean=4, min_disp=0.5)
+    
+    sc.pl.highest_expr_genes(adata_copy, n_top=20, save='.png')
+    #sc.pp.highly_variable_genes(adata, n_top_genes=int(len(adata.var.index) * 0.2), flavor='seurat_v3', inplace=True)
+    adata = adata[:,adata_copy.var['highly_variable']]
     adata.var.reset_index(drop=True, inplace=True)
 
     # Plotting
@@ -243,9 +253,10 @@ def diff_analysis(adata):  # adata is the AnnData object obtained from previous 
             # Selecting variants
             adata_temp = adata[adata.obs['obs_names'].isin(['WT', variant])]
             adata_temp.obs.reset_index(drop=True, inplace=True)
+            adata_temp.obs['obs_names'].replace(to_replace=['WT', variant], value=['A', 'B'], inplace=True)
         
             # Initializing read counts modeling
-            dds = DeseqDataSet(counts=pd.DataFrame(adata_temp.X, columns = adata.var['var_names']), metadata=adata_temp.obs, design_factors='obs_names', refit_cooks=True, inference=inference)
+            dds = DeseqDataSet(counts=pd.DataFrame(adata_temp.X, columns = adata_temp.var['var_names']), metadata=adata_temp.obs, design_factors='obs_names', refit_cooks=True, inference=inference)
             dds.deseq2()                                     # Fitting dispersions and log fold changes
         
             # Statistical analysis
@@ -253,8 +264,6 @@ def diff_analysis(adata):  # adata is the AnnData object obtained from previous 
             stat_res.summary()                               # Running the whole statistical analysis, cooks filtering, and multiple testing adjustement
             result_dict[variant] = stat_res
     
-    with open('./results/diff_analysis/diff_analysis.pkl', 'wb') as file:
-        pkl.dump(result_dict, file)
     print('Display results of each variant vs WT doing returned_dict[variant].results_df')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
     return result_dict  # result_dict is a dict: keys are variants and values are DEA results with regards to WT
@@ -279,8 +288,8 @@ def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_anal
         lfc_df[variant] = stat_res.results_df['log2FoldChange']
         padj_df[variant] = stat_res.results_df['padj']
     
-    lfc_df.fillna(0, inplace=True)  # Set NaN values in LFC dataframe to 0
-    padj_df.fillna(1, inplace=True)  # Set NaN values in p values dataframe to 1
+    lfc_df = lfc_df.fillna(0).transpose()  # Set NaN values in LFC dataframe to 0
+    padj_df = padj_df.fillna(1).transpose()  # Set NaN values in p-values dataframe to 1
     lfc_df.to_csv('./results/diff_analysis/diff_lfc.csv')
     padj_df.to_csv('./results/diff_analysis/diff_padj.csv')
     print('For a higher resolution plot of a particular variant, type returned_dict[variant].plot_MA(s=5)')
@@ -337,21 +346,18 @@ def compare_groups(adata, reference):  # adata is the AnnData object obtained fr
                 permuted_list = [variant, 'permuted_' + variant]
             
                 # HotellingT2
-                import spm1d
                 T2 = spm1d.stats.hotellings2(reference_pca, variant_pca)
                 result_list.append(T2.z)  # T2 statistic 
                 T2 = spm1d.stats.hotellings2(reference_pmpca, variant_pmpca)
                 permuted_list.append(T2.z)
             
                 # bulk.pearson
-                from scipy.stats import pearsonr
                 true_value = 1 - pearsonr(reference_bulk, variant_bulk)[0]
                 result_list.append(true_value)
                 permuted_value = 1 - pearsonr(reference_pmbulk, variant_pmbulk)[0]
                 permuted_list.append(permuted_value)
                 
                 # bulk.spearman
-                from scipy.stats import spearmanr
                 true_value = 1 - spearmanr(reference_bulk, variant_bulk)[0]
                 result_list.append(true_value)
                 permuted_value = 1 - spearmanr(reference_pmbulk, variant_pmbulk)[0]
@@ -419,8 +425,9 @@ def compute_fdr(result_df, permuted_df):  # both arguments are dataframes obtain
     return result_df
 
 
-def plot_dendogram(result_df, threshold):  # result_df is the dataframe obtained from either compare_groups() or compute_fdr() functions
-                                           # threshold is a float number to set the number of cluster in the dendogram
+def plot_dendogram(result_df, h2_thresh, color_thresh):  # result_df is the dataframe obtained from either compare_groups() or compute_fdr() functions
+                                                         # h2_thresh is the HotellingT2 threshold obtained in compute_fdr() function
+                                                         # color_thresh is a float number to change as desired the number of cluster in the dendogram
     """Hierarchical dendogram based on Pearson scores, and hierarchical clustering based on visual inspection changing the threshold parameter"""
     start_time = time.time()
     distance_matrix = 1 - result_df['bulk.pearson'].abs().values.reshape(-1, 1)
@@ -428,13 +435,13 @@ def plot_dendogram(result_df, threshold):  # result_df is the dataframe obtained
     
     # Plotting
     plt.figure(figsize=(10, 6))
-    dn = hierarchy.dendrogram(Z, labels=list(result_df['variant']), leaf_rotation=90, color_threshold = threshold)  # Generating dendrogram
+    dn = hierarchy.dendrogram(Z, labels=list(result_df['variant']), leaf_rotation=90, color_threshold=color_thresh)  # Generating dendrogram
     plt.title('Dendrogram')
     plt.xlabel('Variants')
     plt.ylabel('Distance')
     
     # Highlighting significant variants
-    significant_variants = list(result_df[result_df['HotellingT2'] < 28.48]['variant'])
+    significant_variants = list(result_df[result_df['HotellingT2'] < h2_thresh]['variant'])
     ax = plt.gca()
     x_labels = ax.get_xmajorticklabels()
     for label in x_labels:
@@ -443,28 +450,33 @@ def plot_dendogram(result_df, threshold):  # result_df is the dataframe obtained
     
     plt.savefig('./results/scoring_variants.png', dpi=150)
     plt.show()
-    result_df['cluster'] = hierarchy.fcluster(Z, t=threshold, criterion='distance')
+    result_df['cluster'] = hierarchy.fcluster(Z, t=color_thresh, criterion='distance')
     result_df.to_csv('./results/scoring_variants.csv')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
     return result_df  # result_df now contains a 'cluster' column indicating the group in which the variant is placed
 
 
-def lfc_cluster(lfc_df, padj_df, scoring_df):  # lfc_df is the dataframe with LFC info obtained from plot_dea() function
-                                              # padj_df is the dataframe with corrected p-values obtained from plot_dea() function
-                                              # scoring_df is the dataframe with cluster info obtained from plot_dendogram() function
+def lfc_cluster(lfc_df, padj_df, scoring_df, thresh, perb_gene):  # lfc_df is the dataframe with LFC info obtained from plot_dea() function
+                                                                  # padj_df is the dataframe with corrected p-values obtained from plot_dea() function
+                                                                  # scoring_df is the dataframe with cluster info obtained from plot_dendogram() function
+                                                                  # thresh is the fraction (float 0-1) of variants of same cluster a gene must be significant in
+                                                                  # per_genes is a string with the name of the perturbed gene
     """Creating CSV for Cytoscape with LFC info from significant genes appearing in all variants of the same cluster"""
     start_time = time.time()
+    scoring_df = scoring_df.set_index('variant')
     for cluster in set(scoring_df['cluster']):
     
         # Getting cluster info 
         print('Cluster %s' % str(cluster))
         cluster_df = lfc_df[scoring_df['cluster'] == cluster]
-        genes_df = (padj_df < 0.05).loc[cluster_df.index].sum() == len(cluster_df.index)
+        cond = max(len(cluster_df.index) * thresh, 2)
+        genes_df = (padj_df < 0.05).loc[cluster_df.index].sum() >= cond
         genes_list = list(genes_df[genes_df].index)
+        if len(genes_list) != 0: genes_list.append(perb_gene)
         final_df = lfc_df.loc[cluster_df.index, genes_list]
     
         # Plotting data
-        if final_df.shape[1] == 0: print('No significant genes found across all variants. Maybe cluster %s contains variants similar to WT?' % str(cluster))
+        if final_df.shape[1] == 0: print('No significant genes found across %.2f of variants. Maybe cluster %s contains variants similar to WT?' % (thresh, str(cluster)))
         else:
             condition = '0'
             while condition == '0':
@@ -479,7 +491,7 @@ def lfc_cluster(lfc_df, padj_df, scoring_df):  # lfc_df is the dataframe with LF
                 plt.show()
         
                 # Filtering variants
-                condition = str(input('Introduce 0 if you want to filter some variants'))
+                condition = str(input('Introduce 0 if you want to filter some variants:'))
                 if condition == '0':
                     variants_list = input('Introduce variants names to filter separated by commas:').split(',')
                     if len(variants_list) != 0:
@@ -491,4 +503,135 @@ def lfc_cluster(lfc_df, padj_df, scoring_df):  # lfc_df is the dataframe with LF
     
             final_df.columns.name = 'genes_names'
             pd.DataFrame(final_df.mean(), columns = ['lfc_cluster%s' % str(cluster)]).to_csv('./results/lfc_cluster%s.csv' % str(cluster))
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+
+
+def hotnet_analysis(nodes_df, edges_df, lfc_df, scoring_df, wt_cluster):  # nodes_df and edges_df are dataframes containing info about the nodes and edges, respectively, of the constructed network in Cytoscape using STRING
+                                                                          # lfc_df and scoring_df are dataframes obtained from plot_dea() and plot_dendogram() functions, respectively
+                                                                          # wt_cluster is the integer number referring to the Wild type cluster
+    """Implementation of Hierarchical HotNet algorithm to find significantly altered subnetworks in each cluster"""
+
+    # Setting environment
+    start_time = time.time()
+    if wt_cluster not in set(scoring_df['cluster']): raise ValueError('wt_cluster must be an integer number referring to an existing cluster')
+    path = './results/hotnet_output'
+    if not os.path.exists(f'{path}/data'): os.makedirs(f'{path}/data')
+    if not os.path.exists(f'{path}/intermediate/network'): os.makedirs(f'{path}/intermediate/network')
+    if not os.path.exists(f'{path}/results'): os.makedirs(f'{path}/results')
+    num_perm = 10
+    cluster_dict = {}
+    scoring_df = scoring_df.set_index('variant')
+    for cluster in set(scoring_df['cluster']):
+        if cluster != wt_cluster: cluster_dict[cluster] = scoring_df.index[scoring_df['cluster'] == cluster].tolist()
+
+    # Generating nodes file
+    if not os.path.exists(f'{path}/data/network_nodes.tsv'):
+        nodes_df.index = pd.RangeIndex(start=1, stop=len(nodes_df) + 1)
+        nodes_df['display name'].to_csv(f'{path}/data/network_nodes.tsv', sep="\t", header=False)
+
+    # Generating edges file
+    if not os.path.exists(f'{path}/data/network_edges.tsv'):
+        nodes_dict = dict(zip(nodes_df['shared name'], nodes_df['display name']))
+        edges_df = edges_df['shared name'].str.split(expand=True)[[0, 2]].replace(nodes_dict)
+        nodes_dict = dict(zip(nodes_df['display name'], nodes_df.index))
+        edges_df.replace(nodes_dict).to_csv(f'{path}/data/network_edges.tsv', sep="\t", index=False, header=False)
+
+    # Generating scores files
+    lfc_df = lfc_df.transpose().reset_index(drop=False, names='display name')
+    for cluster in cluster_dict.keys():
+        for variant in cluster_dict[cluster]:
+            if not os.path.exists(f'{path}/data/scores_{variant}.tsv'): pd.concat([lfc_df['display name'], lfc_df[variant].abs()], axis=1).to_csv(f'{path}/data/scores_{variant}.tsv', sep="\t", index=False, header=False)
+            if not os.path.exists(f'{path}/intermediate/network_score_{variant}'): os.makedirs(f'{path}/intermediate/network_score_{variant}')
+
+    # Constructing similarity matrices
+    if os.path.exists(f'{path}/intermediate/network/similarity_matrix.h5') and os.path.exists(f'{path}/intermediate/network/beta.txt'): print('Similarity matrices already constructed')
+    else:
+        print('Constructing similarity matrices...')
+        os.system(f'python ./hotnet/construct_similarity_matrix.py -i {path}/data/network_edges.tsv -o {path}/intermediate/network/similarity_matrix.h5 -bof {path}/intermediate/network/beta.txt')
+    
+    # Permuting networks
+    cond = True
+    for i in range(1, 9):
+        if not os.path.exists(f'{path}/intermediate/network/edge_list_{i}.tsv'): cond = False
+    if cond: print('Networks already permuted')
+    else: 
+        print('Permuting networks...')
+        os.system(f'cp {path}/data/network_nodes.tsv {path}/intermediate/network/index_gene_0.tsv')
+        os.system(f'cp {path}/data/network_edges.tsv {path}/intermediate/network/edge_list_0.tsv')
+        for i in range(1, 5):  # Preserve connectivity of the observed graph
+            os.system(f'python ./hotnet/permute_network.py -i {path}/intermediate/network/edge_list_0.tsv -s {i} -c -o {path}/intermediate/network/edge_list_{i}.tsv')
+        for i in range(5, 9):  # Do not preserve connectivity of the observed graph
+            os.system(f'python ./hotnet/permute_network.py -i {path}/intermediate/network/edge_list_0.tsv -s {i} -o {path}/intermediate/network/edge_list_{i}.tsv')
+
+    # Permuting scores
+    cond = True
+    for cluster in cluster_dict.keys():
+        for variant in cluster_dict[cluster]:
+            if not os.path.exists(f'{path}/intermediate/network_score_{variant}/scores_0.tsv') or not os.path.exists(f'{path}/intermediate/network_score_{variant}/score_bins.tsv'): cond = False
+            for i in range(1, num_perm + 1):
+                if not os.path.exists(f'{path}/intermediate/network_score_{variant}/scores_{i}.tsv'): cond = False
+    if cond: print('Scores already permuted')
+    else: 
+        print('Permuting scores...')
+        for cluster in cluster_dict.keys():
+            for variant in cluster_dict[cluster]:
+                os.system(f'cp {path}/data/scores_{variant}.tsv {path}/intermediate/network_score_{variant}/scores_0.tsv')
+                os.system(f'python ./hotnet/find_permutation_bins.py -gsf {path}/intermediate/network_score_{variant}/scores_0.tsv -igf {path}/data/network_nodes.tsv \
+                -elf {path}/data/network_edges.tsv -ms  1000 -o {path}/intermediate/network_score_{variant}/score_bins.tsv')
+                for i in range(1, num_perm + 1):
+                    os.system(f'python ./hotnet/permute_scores.py -i  {path}/intermediate/network_score_{variant}/scores_0.tsv \
+                    -bf {path}/intermediate/network_score_{variant}/score_bins.tsv -s  {i} -o {path}/intermediate/network_score_{variant}/scores_{i}.tsv')
+
+    # Constructing hierarchies...
+    cond = True
+    for cluster in cluster_dict.keys():
+        for variant in cluster_dict[cluster]:
+            for i in range(num_perm + 1):
+                if not os.path.exists(f'{path}/intermediate/network_score_{variant}/hierarchy_edge_list_{i}.tsv') or not os.path.exists(f'{path}/intermediate/network_score_{variant}/hierarchy_index_gene_{i}.tsv'): cond = False
+    if cond: print('Hierarchies already constructed')
+    else: 
+        print('Constructing hierarchies...')
+        for cluster in cluster_dict.keys():
+            for variant in cluster_dict[cluster]:
+                for i in range(num_perm + 1):
+                    if not os.path.exists(f'{path}/intermediate/network_score_{variant}/hierarchy_edge_list_{i}.tsv') or not os.path.exists(f'{path}/intermediate/network_score_{variant}/hierarchy_index_gene_{i}.tsv'):
+                        os.system(f'python ./hotnet/construct_hierarchy.py -smf  {path}/intermediate/network/similarity_matrix.h5 -igf  {path}/data/network_nodes.tsv \
+                    -gsf  {path}/intermediate/network_score_{variant}/scores_{i}.tsv -helf {path}/intermediate/network_score_{variant}/hierarchy_edge_list_{i}.tsv -higf {path}/intermediate/network_score_{variant}/hierarchy_index_gene_{i}.tsv')
+
+    # Processing hierarchies...
+    cond = True
+    for cluster in cluster_dict.keys():
+        for variant in cluster_dict[cluster]:
+            if not os.path.exists(f'{path}/results/clusters_network_scores_{variant}.tsv') or not os.path.exists(f'{path}/results/sizes_network_scores_{variant}.pdf'): cond = False
+    if cond: print('Hierarchies already processed')
+    else: 
+        print('Processing hierarchies...')
+        for cluster in cluster_dict.keys():
+            for variant in cluster_dict[cluster]:
+                os.system(f'python ./hotnet/process_hierarchies.py -oelf {path}/intermediate/network_score_{variant}/hierarchy_edge_list_0.tsv -oigf {path}/intermediate/network_score_{variant}/hierarchy_index_gene_0.tsv \
+                -pelf $(for i in `seq {num_perm}`; do echo " {path}/intermediate/network_score_{variant}/hierarchy_edge_list_"$i".tsv "; done) -pigf $(for i in `seq {num_perm}`; do echo " {path}/intermediate/network_score_{variant}/hierarchy_index_gene_"$i".tsv "; done) \
+                -lsb  1 -cf {path}/results/clusters_network_scores_{variant}.tsv -pl network scores_{variant} -pf {path}/results/sizes_network_scores_{variant}.pdf')
+
+    # Performing consensus in each cluster...
+    cond = True
+    for cluster in cluster_dict.keys():
+        if not os.path.exists(f'{path}/results/consensus_nodes_cluster_{cluster}.tsv') or not os.path.exists(f'{path}/results/consensus_edges_cluster_{cluster}.tsv'): cond = False
+    if cond: print('Consensus already performed')
+    else:
+        print('Performing consensus...')
+        for cluster in cluster_dict.keys():
+            cluster_list = cluster_dict[cluster]
+            cf = ' '.join([f'{path}/results/clusters_network_scores_{variant}.tsv' for variant in cluster_list])
+            igf = ' '.join([f'{path}/data/network_nodes.tsv' for i in range(len(cluster_list))])
+            elf = ' '.join([f'{path}/data/network_edges.tsv' for i in range(len(cluster_list))])
+            n = ' '.join(['network' for i in range(len(cluster_list))])
+            s = ' '.join([f'score_{variant}' for variant in cluster_list])
+            os.system(f'python ./hotnet/perform_consensus.py -cf {cf} -igf {igf} -elf {elf} -n {n} -s {s} -t 2 -cnf {path}/results/consensus_nodes_cluster_{cluster}.tsv -cef {path}/results/consensus_edges_cluster_{cluster}.tsv')
+            consensus_list = []
+            consensus_df = pd.read_csv(f'{path}/results/consensus_nodes_cluster_{cluster}.tsv', sep='\t', header=None)
+            for row in consensus_df.index:
+                consensus_list += list(consensus_df.loc[row].dropna())
+            pd.DataFrame({'consensus_nodes': consensus_list}).to_csv(f'{path}/results/consensus_nodes_cluster_{cluster}.txt', index=None)
+
+    print(f'Consensus nodes and edges altered in each cluster saved in {path}/results/')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
