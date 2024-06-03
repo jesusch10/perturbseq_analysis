@@ -4,7 +4,7 @@ Later, using network algorithms, such as the Diffuse tool in Cytoscape (propagat
 
 Regular updates on the status of the project are pushed to this GitHub repository; the analysis pipeline starts with a Python implementation (perturbseq_analysis.py) that incorporates additional features such as data filtering, clustering, and pathway annotation for analysing any kind of raw counts matrices obtained from any perturb-seq experiment.  
 
-*Check the [analysis pipeline image](#Analysis-pipeline)(analysis_pipeline.png) and the [updates section](#Updates) to check the development status of this project.  
+*Check the [analysis pipeline image](#Analysis-pipeline) and the [updates section](#Updates) to check the development status of this project.  
 
 
 # Installation
