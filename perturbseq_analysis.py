@@ -8,6 +8,7 @@ import pickle as pkl
 import seaborn as sns
 import matplotlib.pyplot as plt
 from gprofiler import GProfiler
+import mygene
 from goatools.obo_parser import GODag
 from goatools.base import download_go_basic_obo
 from goatools.base import download_ncbi_associations
@@ -21,6 +22,8 @@ from scipy.cluster import hierarchy
 import spm1d
 from scipy.stats import pearsonr
 from scipy.stats import spearmanr
+from tqdm.notebook import tqdm
+import seaborn as sns
 
 
 def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # matrix is a dataframe whose head and index are genes and cells, respectively,
@@ -126,7 +129,55 @@ def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # mat
     return adata  # adata is the AnnData object filtered
 
 
-def louvain_cells(adata):  # adata is the AnnData object obtained from filter_data function,
+
+def louvain_clustering(adata):  # adata is the AnnData object obtained from previous functions
+    """Louvain clustering of cells and genes, and calculate the variant presence (%) in each louvain group"""
+    start_time = time.time()
+
+    # Calculating z-scores
+    print('Calculating z-scores...')
+    sc.pp.scale(adata, max_value=10)  # Calculating z-scores
+
+    # Clustering cells
+    print('Clustering cells...')
+    sc.pp.neighbors(adata)
+    sc.tl.louvain(adata, key_added='louvain')
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['louvain'], s=1, save = '.png')
+    os.system('mv ./figures/umap.png ./results/louvain_cells.png')
+    os.system('rm -r ./figures')
+
+    # Calculate variant presence (%) in each louvain group
+    obs_names = adata.obs['obs_names']
+    result_df = pd.DataFrame(index = list(set(obs_names)), columns = range(len(set(adata.obs['louvain']))))
+    for variant in result_df.index:
+        cluster_nums = [num for flag, num in zip(obs_names == variant, adata.obs['louvain']) if flag]
+        for cluster in set(adata.obs['louvain']):
+           result_df.loc[variant, int(cluster)] = round((np.count_nonzero(pd.Index(cluster_nums) == cluster) / len(cluster_nums)) * 100, 2)
+    print('Variant presence (%) in each louvain group:')
+    display(result_df)
+    result_df.to_csv('./results/louvain_cells.csv')
+    
+    # Transpose and clustering genes
+    print('Clustering genes...')
+    adata = adata.transpose()
+    sc.pp.neighbors(adata)
+    sc.tl.louvain(adata, key_added='louvain')
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['louvain'], s=5, save = '.png')
+    os.system('mv ./figures/umap.png ./results/louvain_genes.png')
+    os.system('rm -r ./figures')
+    print('Number of genes in each louvain group:')
+    display(adata.obs['louvain'].value_counts())
+    adata = adata.transpose()
+
+    with open('./results/louvain_data.pkl', 'wb') as file:
+        pkl.dump(adata, file)
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return adata  # adata is an AnnData object obtained from louvain clustering
+
+
+def louvain_cells(adata):  # adata is the AnnData object obtained from filter_data function
     """Louvain clustering of cells, and calculate the variant presence (%) in each louvain group"""
     start_time = time.time()
 
@@ -173,7 +224,7 @@ def louvain_genes(adata):  # adata is the AnnData object obtained from previous 
     sc.pl.umap(adata, color=['louvain'], s=5, save = '.png')
     os.system('mv ./figures/umap.png ./results/louvain_genes.png')
     os.system('rm -r ./figures')
-    display(adata.var['louvain'].value_counts())
+    display(adata.obs['louvain'].value_counts())
 
     with open('./results/louvain_data.pkl', 'wb') as file:
         pkl.dump(adata.transpose(), file)
@@ -181,60 +232,95 @@ def louvain_genes(adata):  # adata is the AnnData object obtained from previous 
     return adata.transpose()  # adata is an AnnData object obtained from louvain clustering
 
 
-def path_gprofiler(adata, mart):  # adata is the AnnData object obtained from louvain_genes function,
-                                  # and mart is a txt obtained from ensembl mapping (retrieve the genes ID with BioMart)
-    """Pathway enrichment analysis with gprofiler library"""
+def path_gprofiler(data, cond):  # data is the AnnData object obtained from louvain_genes function, or the CSV file obtained from hotnet_analysis function,
+                                 # and cond is a string ('adata' or 'subnetwork_cluster_*' where * is the variants cluster number) to indicate data object type
+    """Pathway enrichment analysis (GO and KEGG) with gprofiler library"""
     start_time = time.time()
+                              
+    # Generating cluster of genes
+    genes_list = []
+    cluster_list = []
+    if cond == 'adata':
+        cluster_list = list(data.var['louvain'])
+        genes_list = list(data.var['var_names'])
+    elif 'subnetwork_cluster_' in cond:
+        for row in data.index:
+            genes_temp = list(data.loc[row].dropna())
+            genes_list += genes_temp
+            cluster_list += [row for i in range(len(genes_temp))]
+    else: raise ValueError(f'{cond} is not a valid parameter. Write \'adata\' or \'subnetwork_cluster_*\', where * is the variants cluster number.')
 
-    # Checking parameters                                 
-    if len(adata.var['var_names']) != len(mart): raise ValueError('Number of genes in adata does not match the length of genes ID list')
-    
-    result_cl = ['louvain', 'source', 'native', 'name', 'p_value', 'significant', 'description', 'term_size', 'query_size', 'intersection_size',
-                 'effective_domain_size', 'precision', 'recall', 'query', 'parents', 'intersections', 'evidences']
+    # Running enrichment analysis
+    result_cl = ['native', 'name', 'p_value', 'term_size', 'query_size', 'intersection_size', 'effective_domain_size', 'precision', 'recall', 'intersections', 'cluster']
     result_df = pd.DataFrame(columns=result_cl)
-    louvain_serie = adata.var['louvain']
-    for louvain_num in range(len(set(louvain_serie))):
-        cluster_genes = [id for flag, id in zip(louvain_serie == str(louvain_num), mart) if flag]
-        gp = GProfiler(return_dataframe=True)
-        result_temp = gp.profile(organism='hsapiens', query=cluster_genes, sources=['KEGG'], no_evidences=False)
-        result_temp['louvain'] = [louvain_num for i in range(len(result_temp.index))]
-        result_df = pd.concat([result_df, result_temp])
+    gp = GProfiler(return_dataframe=True)
+    for cluster_num in set(cluster_list):
+        print(f'Running enrichment analysis in cluster {cluster_num}...')
+        cluster_genes = [gene for gene, cluster in zip(genes_list, cluster_list) if cluster == cluster_num]
+        result_temp = gp.profile(organism='hsapiens', query=cluster_genes, sources=['KEGG', 'GO:BP'], no_evidences=False)
+        result_temp['cluster'] = [cluster_num for i in range(len(result_temp.index))]
+        result_df = pd.concat([result_df, result_temp[result_cl]]).reset_index(drop=True)
+    
     display(result_df)
-    result_df.to_csv('./results/path_gprofiler.csv')
-
+    result_df.to_csv(f'./results/path_gprofiler_{cond}.csv', index=None)
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return result_df  # Return dataframe with pathways annotations of each louvain cluster
+    return result_df  # Return dataframe with GO and KEGG annotations of each cluster
 
 
-def path_goatools(adata, entrez):  # adata is the AnnData object obtained from louvain_genes function,
-                                   # and entrez is a txt obtained from NCBI mapping (https://pubchem.ncbi.nlm.nih.gov/upload/tools/)
-    """Pathway enrichment analysis with goatools library"""
+def path_goatools(data, cond):  # data is the AnnData object obtained from louvain_genes function, or the CSV file obtained from hotnet_analysis function,
+                                # and cond is a string ('adata' or 'subnetwork_cluster_*' where * is the variants cluster number) to indicate data object type
+    """Pathway enrichment analysis with goatools library (WILL BE DEPRECATED)"""
     start_time = time.time()
 
-    # Checking parameters                                 
-    if len(adata.var['var_names']) != len(entrez): raise ValueError('Number of genes in adata does not match the length of genes ID list')
+    # Generating cluster of genes
+    genes_list = []
+    cluster_list = []
+    if cond == 'adata':
+        cluster_list = list(data.var['louvain'])
+        genes_list = list(data.var['var_names'])
+    elif 'subnetwork_cluster_' in cond:
+        for row in data.index:
+            genes_temp = list(data.loc[row].dropna())
+            genes_list += genes_temp
+            cluster_list += [row for i in range(len(genes_temp))]
+    else: raise ValueError(f'{cond} is not a valid parameter. Write \'adata\' or \'subnetwork_cluster_*\', where * is the variants cluster number.')
 
     # Loading requirements 
-    fin_gene2go = download_ncbi_associations()          # Download GO
-    obo_fname = download_go_basic_obo()                 # Download OBO
-    obodag = GODag("go-basic.obo")                      # Load GO DAG
-    objanno = Gene2GoReader(fin_gene2go, taxids=[9606])
-    ns2assoc = objanno.get_ns2assc()                    # Load genes-GO mapping
+    gene2go = download_ncbi_associations()           # Download Entrez IDs - GO associations file
+    gobasicobo = download_go_basic_obo()             # Download GO terms info file
+    obodag = GODag(gobasicobo)
+    objanno = Gene2GoReader(gene2go, taxids=[9606])  # Recovering Human Entrez IDs with GO annotations
+    mg = mygene.MyGeneInfo()
+    
+    # Creating genetic background (Human genome)
+    background_list = set()
+    for ns2assoc in objanno.get_ns2assc().values():
+        background_list.update(ns2assoc.keys())
+    background_list = list(background_list)
+    
+    # Setting enrichment analysis
+    goeaobj = GOEnrichmentStudyNS(background_list, objanno.get_ns2assc(), obodag, propagate_counts=False, alpha=0.05, methods=['fdr_bh'])
+    result_df = pd.DataFrame(columns=['GO', 'Term', 'Class', 'p-value', 'p-corrected', 'Genes symbols', 'Group'])
+    for i in set(cluster_list):
+        print(f'\nRunning enrichment analysis in cluster {i}...')
+        cluster_genes = [gene for gene, cluster in zip(genes_list, cluster_list) if cluster == i]
+        
+        # Mapping gene symbols to Entrez (NCBI) IDs
+        symbol_to_entrez = {}
+        query_results = mg.querymany(cluster_genes, scopes='symbol', fields='entrezgene', species='human')
+        for result in query_results:
+            if 'entrezgene' in result: symbol_to_entrez[result['query']] = int(result['entrezgene'])
+        symbol_list = list(symbol_to_entrez.keys())
+        entrez_list = list(symbol_to_entrez.values())
 
-    # Pathway enrichment analysis
-    goeaobj = GOEnrichmentStudyNS(entrez, ns2assoc, obodag, propagate_counts=False, alpha=0.05, methods=['fdr_bh'])
-
-    result_df = pd.DataFrame(columns=['GO', 'term', 'class', 'p', 'p_corr', 'n_genes', 'louvain'])
-    louvain_serie = adata.obs['louvain']
-    for louvain_num in set(louvain_serie):
-        cluster_genes = [int(id) for flag, id in zip(louvain_serie == louvain_num, entrez) if flag and id != '']
-        goea_results_all = goeaobj.run_study(cluster_genes)
+        # Running enrichment analysis
+        goea_results_all = goeaobj.run_study(entrez_list)
         goea_results_sig = [r for r in goea_results_all if r.p_fdr_bh < 0.05]
         for x in goea_results_sig:
-            result_df.loc[len(result_df)] = [x.GO, x.goterm.name, x.goterm.namespace, x.p_uncorrected, x.p_fdr_bh, cluster_genes, x.ratio_in_study[0],]
+            result_df.loc[len(result_df)] = [x.GO, x.goterm.name, x.goterm.namespace, x.p_uncorrected, x.p_fdr_bh, symbol_list, i]
+    
     display(result_df)
-    result_df.to_csv('./results/path_goatools.csv')
-
+    result_df.to_csv(f'./results/path_goatools_{cond}.csv', index=None)
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
     return result_df  # Return dataframe with pathways annotations of each louvain cluster
 
@@ -299,96 +385,87 @@ def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_anal
 
 def compare_groups(adata, reference):  # adata is the AnnData object obtained from filter_data function,
                                        # reference is a string with the name of the reference group
-    """Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and reference group, and deriving an empirical null distribution of those scores"""
+    """Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and reference group,
+       deriving an empirical null distribution of those scores, and then calculating the threshold for each method as 5% of desired FDR"""
     start_time = time.time()
-    print('Calculating z-scores...')
-    sc.pp.scale(adata, max_value=10)  # Calculating z-scores
+
+    def calculate_metrics(adata_df, adata_pca, reference, variant, obs_names):
+        """Calculating metrics"""
+        result_list = []
+        
+        # Retrieving info from selected variants
+        reference_df = adata_df[adata.obs[obs_names] == reference]
+        variant_df = adata_df[adata.obs[obs_names] == variant]
+    
+        # Converting into bulkified data
+        reference_bulk = np.mean(np.array(reference_df),axis=0)
+        variant_bulk = np.mean(np.array(variant_df),axis=0)
+    
+        # Retrieving PCA info for T2 Hotelling method
+        reference_pca = adata_pca[adata.obs[obs_names] == reference]
+        variant_pca = adata_pca[adata.obs[obs_names] == variant]
+    
+        # HotellingT2
+        T2 = spm1d.stats.hotellings2(reference_pca, variant_pca)
+        result_list.append(T2.z)  # T2 statistic 
+    
+        # bulk.pearson
+        true_value = 1 - pearsonr(reference_bulk, variant_bulk)[0]
+        result_list.append(true_value)
+        
+        # bulk.spearman
+        true_value = 1 - spearmanr(reference_bulk, variant_bulk)[0]
+        result_list.append(true_value)
+                
+        # bulk.L1
+        true_value = np.sum(np.abs(reference_bulk - variant_bulk)) * 1.0 / reference_df.shape[1]
+        result_list.append(true_value)
+    
+        return result_list
+
+    # Calculating first 50 elements in the Principal Component Space
     print('Calculating first 50 elements in the Principal Component Space...')
-    sc.tl.pca(adata,svd_solver='arpack',n_comps=50)  # Calculating first 50 elements in the Principal Component Space
+    sc.tl.pca(adata,svd_solver='arpack',n_comps=50)
     adata.obsm['X_pca'] *= -1
+
+    # Setting data
     result_df = pd.DataFrame(columns = ['reference', 'variant', 'HotellingT2','bulk.pearson','bulk.spearman','bulk.L1'])
     permuted_df = pd.DataFrame(columns = ['reference', 'variant', 'HotellingT2','bulk.pearson','bulk.spearman','bulk.L1'])
-    
-    # Permuting data
     adata.obs['obs_permuted'] = list(adata.obs['obs_names'])
-    for permutation in range(10):
-        print('Permutation', permutation)
-        adata.obs['obs_permuted'] = list(adata.obs['obs_permuted'].sample(frac=1, random_state=permutation, ignore_index=True))
+    adata_df = pd.DataFrame(adata.X)
+    adata_df.index = adata.obs.index
+    adata_pca = pd.DataFrame(adata.obsm['X_pca']).loc[:,:20]
+    adata_pca.index = adata.obs.index
+    result_index = 0
+    permuted_index = 0
 
-        # Calculating metrics
-        index = 0
-        for variant in set(adata.obs['obs_names']):
+    # Calculating metrics
+    print(f'Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and {reference}...')
+    variants_list = set(adata.obs['obs_names'])
+    with tqdm(total=len(variants_list)) as progress_bar:
+        for variant in variants_list:
             if variant != reference:
-
-                # Retrieving info from selected variants
-                adata_df = pd.DataFrame(adata.X)
-                adata_df.index = adata.obs.index
-                reference_df = adata_df[adata.obs['obs_names'] == reference]
-                variant_df = adata_df[adata.obs['obs_names'] == variant]
-                reference_pmdf = adata_df[adata.obs['obs_permuted'] == reference]
-                variant_pmdf = adata_df[adata.obs['obs_permuted'] == variant]
-            
-                # Converting into bulkified data
-                reference_bulk = np.mean(np.array(reference_df),axis=0)
-                variant_bulk = np.mean(np.array(variant_df),axis=0)
-                reference_pmbulk = np.mean(np.array(reference_pmdf),axis=0)
-                variant_pmbulk = np.mean(np.array(variant_pmdf),axis=0)
-            
-                # Retrieving PCA info for T2 Hotelling method
-                adata_pca = pd.DataFrame(adata.obsm['X_pca']).loc[:,:20]
-                adata_pca.index = adata.obs.index
-                reference_pca = adata_pca[adata.obs['obs_names'] == reference]
-                variant_pca = adata_pca[adata.obs['obs_names'] == variant]
-                reference_pmpca = adata_pca[adata.obs['obs_permuted'] == reference]
-                variant_pmpca = adata_pca[adata.obs['obs_permuted'] == variant]
-            
-                result_list = [reference, variant]
-                permuted_list = [variant, 'permuted_' + variant]
-            
-                # HotellingT2
-                T2 = spm1d.stats.hotellings2(reference_pca, variant_pca)
-                result_list.append(T2.z)  # T2 statistic 
-                T2 = spm1d.stats.hotellings2(reference_pmpca, variant_pmpca)
-                permuted_list.append(T2.z)
-            
-                # bulk.pearson
-                true_value = 1 - pearsonr(reference_bulk, variant_bulk)[0]
-                result_list.append(true_value)
-                permuted_value = 1 - pearsonr(reference_pmbulk, variant_pmbulk)[0]
-                permuted_list.append(permuted_value)
+                result_df.loc[result_index] = [reference, variant] + calculate_metrics(adata_df, adata_pca, reference, variant, 'obs_names')
+                result_index += 1
                 
-                # bulk.spearman
-                true_value = 1 - spearmanr(reference_bulk, variant_bulk)[0]
-                result_list.append(true_value)
-                permuted_value = 1 - spearmanr(reference_pmbulk, variant_pmbulk)[0]
-                permuted_list.append(permuted_value)
-                        
-                # bulk.L1
-                true_value = np.sum(np.abs(reference_bulk - variant_bulk)) * 1.0 / reference_df.shape[1]
-                result_list.append(true_value)
-                permuted_value = np.sum(np.abs(reference_pmbulk - variant_pmbulk)) * 1.0 / reference_df.shape[1]
-                permuted_list.append(permuted_value)
-                
-                result_df.loc[index], permuted_df.loc[index] = result_list, permuted_list
-                index += 1
+                # Permuting data
+                for permutation in range(10):
+                    adata.obs['obs_permuted'] = list(adata.obs['obs_permuted'].sample(frac=1, random_state=permutation, ignore_index=True))
+                    permuted_df.loc[permuted_index] = [variant, 'permuted_' + variant] + calculate_metrics(adata_df, adata_pca, reference, variant, 'obs_permuted')
+                    permuted_index += 1
+            progress_bar.update(1)
 
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return(adata, result_df, permuted_df)  # adata is an AnnData object with z-scores, and the rest are both dataframes of metric scores calculated for each variant VS reference group, and as null distribution
-
-
-def compute_fdr(result_df, permuted_df):  # both arguments are dataframes obtained from compare_groups() function
-    """Calculating the threshold for each method as 5% of desired FDR"""
-    start_time = time.time()
     result_df['dataset'] = 'true'
     permuted_df['dataset'] = 'permuted'
     combo_df = pd.concat([result_df, permuted_df])
+
+    # Calculating FDR
+    print('Calculating the threshold for each method as 5% of desired FDR and plotting...')
     min_fdr = 1.0 / combo_df.shape[0]
     for method in ['HotellingT2', 'bulk.pearson', 'bulk.spearman', 'bulk.L1']:
         combo_df = combo_df.sort_values(by=method,ascending=False)
         combo_df['FDR_' + method] = 1
         combo_df = combo_df.reset_index(drop=True)
-
-        # Calculating FDR
         for i in range(combo_df.shape[0]):
             value = float(combo_df.loc[i, method])
             passed = combo_df[combo_df[method] >= value]
@@ -420,40 +497,67 @@ def compute_fdr(result_df, permuted_df):  # both arguments are dataframes obtain
         plt.savefig('./results/fdr_%s.png' % method, dpi=150)
         plt.show()
 
-    result_df = combo_df[combo_df['dataset'] == 'true'].drop(columns=['dataset']).reset_index(drop=True)
+    scoring_df = combo_df[combo_df['dataset'] == 'true'].drop(columns=['dataset']).reset_index(drop=True)
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return result_df
+    return scoring_df
 
 
-def plot_dendogram(result_df, h2_thresh, color_thresh):  # result_df is the dataframe obtained from either compare_groups() or compute_fdr() functions
-                                                         # h2_thresh is the HotellingT2 threshold obtained in compute_fdr() function
-                                                         # color_thresh is a float number to change as desired the number of cluster in the dendogram
-    """Hierarchical dendogram based on Pearson scores, and hierarchical clustering based on visual inspection changing the threshold parameter"""
-    start_time = time.time()
-    distance_matrix = 1 - result_df['bulk.pearson'].abs().values.reshape(-1, 1)
-    Z = hierarchy.linkage(distance_matrix, method='average')  # Hierarchical clustering
+def plot_dendogram(adata, reference, scoring_df, h2_thresh, color_thresh):    # adata is the AnnData object obtained from filter_data function,
+    """Hierarchical dendogram based on Pearson scores,"""                     # reference is a string with the name of the reference group
+    """and hierarchical clustering based on visual"""                         # scoring_df is the dataframe obtained from compare_groups() function
+    """inspection changing the threshold parameter"""                         # h2_thresh is the HotellingT2 threshold obtained in compute_fdr() function
+    start_time = time.time()                                                  # color_thresh is a float number to change as desired the number of cluster in the dendogram
+
+    # Hierarchical clustering
+    distance_matrix = 1 - scoring_df['bulk.pearson'].abs().values.reshape(-1, 1)
+    Z = hierarchy.linkage(distance_matrix, method='average')
+    scoring_df['cluster'] = hierarchy.fcluster(Z, t=color_thresh, criterion='distance')
+    scoring_df.to_csv('./results/scoring_df.csv', index=None)
     
     # Plotting
     plt.figure(figsize=(10, 6))
-    dn = hierarchy.dendrogram(Z, labels=list(result_df['variant']), leaf_rotation=90, color_threshold=color_thresh)  # Generating dendrogram
+    dn = hierarchy.dendrogram(Z, labels=list(scoring_df['variant']), leaf_rotation=90, color_threshold=color_thresh)  # Generating dendrogram
     plt.title('Dendrogram')
     plt.xlabel('Variants')
     plt.ylabel('Distance')
     
     # Highlighting significant variants
-    significant_variants = list(result_df[result_df['HotellingT2'] < h2_thresh]['variant'])
+    significant_variants = list(scoring_df[scoring_df['HotellingT2'] < h2_thresh]['variant'])
     ax = plt.gca()
     x_labels = ax.get_xmajorticklabels()
     for label in x_labels:
         if label.get_text() in significant_variants:
             label.set_color('red')  # Change this color as needed
-    
-    plt.savefig('./results/scoring_variants.png', dpi=150)
+    plt.savefig('./results/scoring_dendogram_variants.png', dpi=150)
     plt.show()
-    result_df['cluster'] = hierarchy.fcluster(Z, t=color_thresh, criterion='distance')
-    result_df.to_csv('./results/scoring_variants.csv')
+
+    # Creating dataframe with z-scores of genes across variants
+    adata_df = pd.DataFrame(adata.X)
+    adata_df.index = adata.obs.index
+    variants_list = list(adata.obs['obs_names'].unique())
+    variants_list.remove(reference)
+    variants_df = pd.DataFrame(index=variants_list, columns=adata.var['var_names'])
+    for variant in variants_list:
+        variants_df.loc[variant] = list(adata_df[adata.obs['obs_names'] == variant].mean())
+    variants_df = variants_df.astype(float)  # Make sure all elements are float numbers
+    variants_df = variants_df.loc[scoring_df['variant']]  # Reordering variants to match scoring_df order
+
+    # Plotting cluster heat map
+    cluster_list = set(scoring_df['cluster'])
+    palette = sns.color_palette("muted", len(cluster_list))
+    color_dict = dict(zip(cluster_list, palette))
+    color_list = pd.Series(list(scoring_df['cluster']), index=scoring_df['variant']).map(color_dict)
+    x = 0.25
+    heat_map = sns.clustermap(variants_df.transpose(), row_cluster=True, col_cluster=True, col_linkage=Z, col_colors=color_list,
+                   figsize=(20,20), cmap='bwr',vmin=-x,vmax=x,
+                   cbar_pos=(0.75, 0.9, 0.15, 0.05), cbar_kws={'orientation':'horizontal', "label": "z-score", 'ticks':[-x,0,x]})
+    heat_map.ax_heatmap.set_xlabel('Variants')
+    heat_map.ax_heatmap.set_ylabel('Genes')
+    plt.savefig('./results/scoring_heat_map.png', dpi=150)
+    plt.show()
+    
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return result_df  # result_df now contains a 'cluster' column indicating the group in which the variant is placed
+    return scoring_df  # scoring_df now contains a 'cluster' column indicating the group in which the variant is placed
 
 
 def lfc_cluster(lfc_df, padj_df, scoring_df, thresh, perb_gene):  # lfc_df is the dataframe with LFC info obtained from plot_dea() function
@@ -509,7 +613,7 @@ def lfc_cluster(lfc_df, padj_df, scoring_df, thresh, perb_gene):  # lfc_df is th
 def hotnet_analysis(nodes_df, edges_df, lfc_df, scoring_df, wt_cluster):  # nodes_df and edges_df are dataframes containing info about the nodes and edges, respectively, of the constructed network in Cytoscape using STRING
                                                                           # lfc_df and scoring_df are dataframes obtained from plot_dea() and plot_dendogram() functions, respectively
                                                                           # wt_cluster is the integer number referring to the Wild type cluster
-    """Implementation of Hierarchical HotNet algorithm to find significantly altered subnetworks in each cluster"""
+    """Implementation of Hierarchical HotNet algorithm (https://doi.org/10.1093/bioinformatics/bty613) to find significantly altered subnetworks in each cluster"""
 
     # Setting environment
     start_time = time.time()
@@ -537,10 +641,9 @@ def hotnet_analysis(nodes_df, edges_df, lfc_df, scoring_df, wt_cluster):  # node
         edges_df.replace(nodes_dict).to_csv(f'{path}/data/network_edges.tsv', sep="\t", index=False, header=False)
 
     # Generating scores files
-    lfc_df = lfc_df.transpose().reset_index(drop=False, names='display name')
     for cluster in cluster_dict.keys():
         for variant in cluster_dict[cluster]:
-            if not os.path.exists(f'{path}/data/scores_{variant}.tsv'): pd.concat([lfc_df['display name'], lfc_df[variant].abs()], axis=1).to_csv(f'{path}/data/scores_{variant}.tsv', sep="\t", index=False, header=False)
+            if not os.path.exists(f'{path}/data/scores_{variant}.tsv'): lfc_df.loc[variant].to_csv(f'{path}/data/scores_{variant}.tsv', sep="\t", header=False)
             if not os.path.exists(f'{path}/intermediate/network_score_{variant}'): os.makedirs(f'{path}/intermediate/network_score_{variant}')
 
     # Constructing similarity matrices
