@@ -124,11 +124,11 @@ It generates one `.txt` file per cluster saved in `./results/hotnet_output/resul
 
 
 # Updates:
-· Functions louvain_genes() and louvain_cells() merged into the function louvain_clustering().  
-· Function path_goatools() deprecated.  
-· Function path_gprofiler() annotates without mapping the genes names. Using genes symbols works perfectly.  
-· Function compute_fdr() was optimized and included in function compare_groups().  
-· Function plot_dendogram() plots a heat map.  
+· Functions `louvain_genes()` and `louvain_cells()` merged into the function `louvain_clustering()`.  
+· Function `path_goatools()` deprecated.  
+· Function `path_gprofiler()` annotates without mapping the genes names. Using genes symbols works perfectly.  
+· Function `compute_fdr()` was optimized and included in function `compare_groups()` (also optimized).  
+· Function `plot_dendogram()` plots a heat map.  
 
 
 # Example:
