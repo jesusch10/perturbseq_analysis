@@ -1,10 +1,10 @@
-Single-cell RNA sequencing (scRNA-seq) data from perturb-seq experiments aims to investigate the functional impact of genetic variants in cancer. However, the phenotypic impact is complex and may not result in distinct clusters. Instead, the functional impact may manifest as a spectrum of gene expression changes. Therefore, closer relationships between interconnected genes in molecular networks must be prioritized.  
+Single-cell RNA sequencing (scRNA-seq) data from perturb-seq experiments aims to investigate the functional impact of genetic variants in cancer. However, the phenotypic impact is complex and may not result in distinct clusters. Instead, the functional impact may manifest as a spectrum of gene expression changes; variants with similar expression profiles can be clustered together capturing the complexity of biological systems more effectively than single comparison approaches.  
 
-Using network diffusion algorithms, such as the Diffuse tool in Cytoscape, it is possible to propagate biological signals or information across gene interaction networks derived from the perturb-seq data. By analysing the diffusion scores or signal propagation patterns, the goal is to identify pairs of genes that exhibit closer relationships or functional associations, providing insights into gene function, regulatory mechanisms, and disease pathways.  
+Later, using network algorithms, such as the Diffuse tool in Cytoscape (propagation of biological signals) or HotNet (statistic significant of resulting subnetworks) among others, the goal is to identify pairs of genes that exhibit closer relationships or functional associations, providing insights into gene function, regulatory mechanisms, and disease pathways.  
 
-This analysis pipeline also contains a Python implementation (`perturbseq_analysis.py`) to incorporate additional features such as data filtering, clustering, and pathway annotation with a Python implementation for analysing raw counts matrices obtained from any perturb-seq experiment.  
+Regular updates on the status of the project are pushed to this GitHub repository; the analysis pipeline starts with a Python implementation (perturbseq_analysis.py) that incorporates additional features such as data filtering, clustering, and pathway annotation for analysing any kind of raw counts matrices obtained from any perturb-seq experiment.  
 
-*Check the analysis pipeline image below to know the development status of this project.  
+*Check the [analysis pipeline image](#Analysis-pipeline) and the [updates section](#Updates) to check the development status of this project.  
 
 
 # Installation
