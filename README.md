@@ -18,15 +18,10 @@ import perturbseq_analysis as pseq
 - [Filtering data](#Filtering-data)
 - [UMAP by variants](#UMAP-by-variants)
 - [Louvain clustering](#Louvain-clustering)
-  - [Clustering by cells](#Clustering-by-cells)
-  - [Clustering by genes](#Clustering-by-genes)
 - [Pathway enrichment analysis](#Pathway-enrichment-analysis)
-  - [Using the gprofiler library](#Using-the-gprofiler-library)
-  - [Using the goatools library](#Using-the-goatools-library)
 - [Differential expression analysis (DEA)](#Differential-expression-analysis-DEA)
   - [Plotting DEA results](#Plotting-DEA-results)
 - [Comparing variants expression profiles](#Comparing-variants-expression-profiles)
-  - [Calculating threshold for 5% of FDR](#Calculating-threshold-for-5-of-FDR)
   - [Hierarchical dendogram and clustering](#Hierarchical-dendogram-and-clustering)
 - [Merging LFC info per cluster](#Merging-LFC-info-per-cluster)
 - [Finding significantly altered subnetworks in each cluster](#Finding-significantly-altered-subnetworks-in-each-cluster)
@@ -51,41 +46,24 @@ Plot UMAP of each variant against the wild type (WT) (all also saved in `./resul
 ```
 pseq.var_umap(adata)
 # adata is the AnnData object obtained from any of the previous functions
-```
+```  
 
 ## Louvain clustering:
-### Clustering by cells:
-It displays a UMAP plot with louvain clusters, and dataframe with the variant presence (%) in each louvain group (also both saved in `./results/`).
+It displays two UMAP plots (louvain clusters of cells, and louvain clusters of genes), and a dataframe with the variant presence (%) in each louvain group (all saved in `./results/`).
 ```
-adata = pseq.louvain_cells(adata)
-# adata is the AnnData object obtained from filter_data() or louvain_genes() functions
-```
-It returns an AnnData object obtained from louvain clustering.  
-
-### Clustering by genes:
-It displays a UMAP plot with louvain clusters (also saved in `./results/`).
-```
-adata = pseq.louvain_genes(adata)
-# adata is the AnnData object obtained from filter_data() or louvain_cells() functions
+adata = pseq.louvain_clustering(adata)
+# adata is the AnnData object obtained from filter_data() function
 ```
 It returns an AnnData object obtained from louvain clustering (CHECKPOINT: also saved in `./results/louvain_data.pkl`).  
 
 ## Pathway enrichment analysis:
-### Using the gprofiler library:
+GO and KEGG annotations using the gprofiler library.
 ```
-gprofiler_df = pseq.path_gprofiler(adata, mart):
-# adata is the AnnData object obtained from louvain_genes() function,
-# and mart is a txt obtained from ensembl mapping (retrieve the genes ID with BioMart)
+gprofiler_df = pseq.path_gprofiler(data, cond)
+# data is the AnnData object obtained from louvain_genes function, or the CSV file obtained from hotnet_analysis function,
+# and cond is a string ('adata' or 'subnetwork_cluster_*' where * is the variants cluster number) to indicate data object type
 ```
-It returns a dataframe with pathways annotations of each louvain cluster (also saved in `./results/`).  
-
-### Using the goatools library:
-```
-goatools_df = pseq.path_goatools(adata, entrez):
-# adata is the AnnData object obtained from louvain_genes function,
-# and entrez is a txt obtained from NCBI mapping (https://pubchem.ncbi.nlm.nih.gov/upload/tools/)
-```
-It return dataframe with pathways annotations of each louvain cluster (also saved in `./results/`).  
+It returns a dataframe with GO and KEGG annotations of each cluster (also saved in `./results/`).  
 
 ## Differential expression analysis (DEA):
 DEA with the library PyDESeq2, a Python implementation of the DESeq2 method in R.
@@ -103,27 +81,25 @@ lfc_df, padj_df = pseq.plot_dea(result_dict):
 It returns two dataframes  (CHECKPOINT: both also saved in `./results/diff_analysis/`) containing LFC and corrected p-values info, respectively. All plots are saved in `./results/diff_analysis/`.  
 
 ## Comparing variants expression profiles:
-Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and reference group, and deriving an empirical null distribution of those scores.
+Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and reference group, deriving an empirical null distribution of those scores, and then calculating and plotting the threshold for each method as 5% of desired FDR. plots are saved in `./results/`.
 ```
-adata, result_df, permuted_df = pseq.compare_groups(adata, reference)
-# adata is the AnnData object obtained from any of the previous functions
+scoring_df = pseqcompare_groups(adata, reference)
+# adata is the AnnData object obtained from filter_data function,
+# reference is a string with the name of the reference group
 ```
-It returns an AnnData object with z-scores, and the rest are both dataframes of metric scores calculated for each variant VS reference group, and as null distribution.  
-
-### Calculating threshold for 5% of FDR:
-```
-result_df = pseq.compute_fdr(result_df, permuted_df)
-# both arguments are dataframes obtained from compare_groups() function
-```
-It returns the same dataframe with new columns about FDR. All plots are saved in `./results/`.
+It returns a dataframes of metric scores calculated for each variant VS reference group.  
 
 ### Hierarchical dendogram and clustering:
-Based on Pearson scores and visual inspection (changing the threshold), respectively.
+Hierarchical dendogram based on Pearson scores, hierarchical clustering based on visual inspection changing the threshold parameter, and plotting the heat map.
 ```
-result_df = pseq.plot_dendogram(result_df, threshold)
-# result_df is the dataframe obtained from compare_groups() or compute_fdr() function, and threshold is a float number.
+scoring_df = pseq.plot_dendogram(adata, reference, scoring_df, h2_thresh, color_thresh)
+# adata is the AnnData object obtained from filter_data function,
+# reference is a string with the name of the reference group,
+# scoring_df is the dataframe obtained from compare_groups() function,
+# h2_thresh is the HotellingT2 threshold obtained in compute_fdr() function,
+# color_thresh is a float number to change as desired the number of clusters in the dendogram.
 ```
-It returns the same dataframe with a new column indicating the cluster each variant belongs to.  
+It returns the same dataframe now containing the `cluster` column indicating the group in which the variant is placed.
 
 ## Merging LFC info per cluster:
 Creating CSV for Cytoscape with LFC info from significant genes appearing in all variants of the same cluster.
@@ -148,7 +124,11 @@ It generates one `.txt` file per cluster saved in `./results/hotnet_output/resul
 
 
 # Updates:
-· Functions lfc_cluster() and hotnet_analysis() are in conflict.  
+· Functions louvain_genes() and louvain_cells() merged into the function louvain_clustering().
+· Function path_goatools() deprecated.
+· Function path_gprofiler() annotates without mapping the genes names. Using genes symbols works perfectly.
+· Function compute_fdr() was optimized and included in function compare_groups().
+· Function plot_dendogram() plots a heat map.
 
 
 # Example:
