@@ -119,9 +119,9 @@ pseq.lfc_cluster(lfc_df, padj_df, scoring_df, thresh, perb_gene)
 ### Finding significantly altered subnetworks in each cluster:
 Implementation of Hierarchical HotNet algorithm (https://doi.org/10.1093/bioinformatics/bty613).
 ```
-pseq.hotnet_analysis(nodes_df, edges_df, lfc_df, scoring_df, wt_cluster)
+pseq.hotnet_analysis(nodes_df, edges_df, padj_df, scoring_df, wt_cluster)
 # nodes_df and edges_df are dataframes containing info about the nodes and edges, respectively, of the constructed network in Cytoscape using STRING.
-# lfc_df and scoring_df are dataframes obtained from plot_dea() and plot_dendogram() functions, respectively.
+# padj_df and scoring_df are dataframes obtained from plot_dea() and plot_dendogram() functions, respectively.
 # wt_cluster is the integer number referring to the Wild type cluster deduced from plot_dendogram() function.
 ```
 It generates one `.txt` file per cluster saved in `./results/hotnet_output/results/` to feed Cytoscape for further functional enrichment.  
@@ -143,6 +143,7 @@ It returns a dataframe with GO and KEGG annotations of each cluster (also saved 
 # Updates:
 · Function `filter_data()` returns two AnnData objects filtered, but the second is also normalized and data-transformated.   
 · Function `lfc_cluster()` plots a heat map and display a dataframe of genes with 30% < Coefficient of Variation (CV).  
+· Function `hotnet_analysis()` uses padj_df instead of lfc_df to make sure that significantly underexpressed genes are included.  
 
 
 # Example:
