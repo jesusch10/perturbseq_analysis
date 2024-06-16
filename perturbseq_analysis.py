@@ -8,13 +8,7 @@ import pickle as pkl
 import seaborn as sns
 import matplotlib.pyplot as plt
 from gprofiler import GProfiler
-import mygene
-from goatools.obo_parser import GODag
-from goatools.base import download_go_basic_obo
-from goatools.base import download_ncbi_associations
 from matplotlib.backends.backend_pdf import PdfPages
-from goatools.anno.genetogo_reader import Gene2GoReader
-from goatools.goea.go_enrichment_ns import GOEnrichmentStudyNS
 from pydeseq2.default_inference import DefaultInference
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.ds import DeseqStats
@@ -23,7 +17,9 @@ import spm1d
 from scipy.stats import pearsonr
 from scipy.stats import spearmanr
 from tqdm.notebook import tqdm
-import seaborn as sns
+
+
+########## FILTERING DATA ##########
 
 
 def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # matrix is a dataframe whose head and index are genes and cells, respectively,
@@ -40,16 +36,16 @@ def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # mat
 
     # Creating metadata
     print('Generating metadata...')
-    obs_meta = pd.DataFrame(index = range(len(matrix.index)))
+    obs_meta = pd.DataFrame(index = obs_names) # obs_meta = pd.DataFrame(index = range(len(matrix.index)))
     obs_meta['obs_names'] = obs_names
     obs_meta['total_counts'] = list(matrix.sum(axis=1))
     obs_meta['n_genes_counts'] = list(matrix.astype(bool).sum(axis=1))
     obs_meta['batch'] = batch_nums
-    mt_found = [mt for mt in mt_names if mt in list(var_names)]
+    mt_found = [mt for mt in mt_names if mt in var_names]
     matrix.columns = var_names
-    obs_meta['mt_counts'] = pd.Index(matrix[mt_found].sum(axis=1))
+    obs_meta['mt_counts'] = list(matrix[mt_found].sum(axis=1)) # obs_meta['mt_counts'] = pd.Index(matrix[mt_found].sum(axis=1))
     obs_meta['pct_mt_counts'] = round(obs_meta['mt_counts'] / obs_meta['total_counts'] * 100, 2)
-    var_meta = pd.DataFrame(index = range(len(matrix.columns)))
+    var_meta = pd.DataFrame(index=var_names) # var_meta = pd.DataFrame(index = range(len(matrix.columns)))
     var_meta['var_names'] = var_names
     
     # Setting rules to filter
@@ -70,6 +66,7 @@ def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # mat
 
     # Downsampling batches so they have the same median
     print('Downsampling batches...')
+    matrix.index = obs_names # Added
     for batch, batch_median in enumerate(obs_meta.groupby(obs_meta['batch'])['total_counts'].median()):
         if batch_median > batch_max:
             batch_factor = batch_max / batch_median
@@ -84,12 +81,12 @@ def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # mat
     # Filtering cells with <7000 counts
     print('Filtering cells with <%i counts...' % min_count)
     adata = adata[adata.obs['total_counts'] > min_count]
-    adata.obs.reset_index(drop=True, inplace=True)
+    #adata.obs.reset_index(drop=True, inplace=True)
     
     # Filtering cells with >20% mitochondrial counts
     print('Filtering cells with >20% mitochondrial counts...')
     adata = adata[adata.obs['pct_mt_counts'] < 20]
-    adata.obs.reset_index(drop=True, inplace=True)
+    #adata.obs.reset_index(drop=True, inplace=True)
     
     # Filtering AnnData
     print('Filtering cells with <200 genes')
@@ -99,294 +96,49 @@ def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # mat
     print('Filtering genes present in <3 cells')
     sc.pp.filter_genes(adata, min_cells=3)
 
-    # Filtering 80% lowest variable genes
-    print('Filtering 80% lowest variable genes')
-    adata.var.index = list(adata.var['var_names'])
+    # Normalizing data and filtering lowest variable genes
+    print('Normalizing data and filtering lowest variable genes...')
+    #adata.var.index = list(adata.var['var_names'])
+    adata_nor = copy.deepcopy(adata)
+    sc.pp.normalize_total(adata_nor, target_sum=1e4)
+    sc.pp.log1p(adata_nor)
+    sc.pp.highly_variable_genes(adata_nor, min_mean=0.0125, max_mean=4, min_disp=0.5)
+    sc.pl.highest_expr_genes(adata_nor, n_top=20, save='.png')
+    sc.pp.scale(adata_nor, max_value=10)  # Calculating z-scores
+    adata, adata_nor = adata[:,adata_nor.var['highly_variable']], adata_nor[:,adata_nor.var['highly_variable']]
+    #adata.var.reset_index(drop=True, inplace=True), adata_nor.var.reset_index(drop=True, inplace=True)
 
-    adata_copy = copy.deepcopy(adata)
-    sc.pp.normalize_total(adata_copy, target_sum=1e4)
-    sc.pp.log1p(adata_copy)
-    sc.pp.highly_variable_genes(adata_copy, min_mean=0.0125, max_mean=4, min_disp=0.5)
-    
-    sc.pl.highest_expr_genes(adata_copy, n_top=20, save='.png')
-    #sc.pp.highly_variable_genes(adata, n_top_genes=int(len(adata.var.index) * 0.2), flavor='seurat_v3', inplace=True)
-    adata = adata[:,adata_copy.var['highly_variable']]
-    adata.var.reset_index(drop=True, inplace=True)
+    # Running Principal Component Analysis
+    print('Running Principal Component Analysis...')
+    sc.tl.pca(adata_nor, svd_solver='arpack')
+    sc.pl.pca_variance_ratio(adata_nor, log=True, save='.png')
 
     # Plotting
-    sc.pl.scatter(adata, x='total_counts', y='pct_mt_counts', save = '1.png')
-    sc.pl.scatter(adata, x='total_counts', y='n_genes_counts', save = '2.png')
+    sc.pl.scatter(adata, x='total_counts', y='n_genes_counts', color='pct_mt_counts', save = '.png')
+    #sc.pl.scatter(adata, x='total_counts', y='pct_mt_counts', save = '1.png')
+    #sc.pl.scatter(adata, x='total_counts', y='n_genes_counts', save = '2.png')
 
     # Saving
-    with open('./results/filter_data.pkl', 'wb') as file:
-        pkl.dump(adata, file)
+    with open('./results/filter_data.pkl', 'wb') as file: pkl.dump(adata, file)
+    with open('./results/normalized_data.pkl', 'wb') as file: pkl.dump(adata_nor, file)
     os.system('mv ./figures/highest_expr_genes.png ./results/filter_data_variable_genes.png')
-    os.system('mv ./figures/scatter1.png ./results/filter_data_mt_counts.png')
-    os.system('mv ./figures/scatter2.png ./results/filter_data_genes_counts.png')
+    os.system('mv ./figures/scatter.png ./results/filter_data_counts.png')
+    #os.system('mv ./figures/scatter1.png ./results/filter_data_mt_counts.png')
+    #os.system('mv ./figures/scatter2.png ./results/filter_data_genes_counts.png')
+    os.system('mv ./figures/pca_variance_ratio.png ./results/filter_data_pca.png')
     os.system('rm -r ./figures')
 
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return adata  # adata is the AnnData object filtered
+    return adata, adata_nor  # both are the AnnData objects filtered, but the second is also normalized and data-transformated
 
 
-
-def louvain_clustering(adata):  # adata is the AnnData object obtained from previous functions
-    """Louvain clustering of cells and genes, and calculate the variant presence (%) in each louvain group"""
-    start_time = time.time()
-
-    # Calculating z-scores
-    print('Calculating z-scores...')
-    sc.pp.scale(adata, max_value=10)  # Calculating z-scores
-
-    # Clustering cells
-    print('Clustering cells...')
-    sc.pp.neighbors(adata)
-    sc.tl.louvain(adata, key_added='louvain')
-    sc.tl.umap(adata)
-    sc.pl.umap(adata, color=['louvain'], s=1, save = '.png')
-    os.system('mv ./figures/umap.png ./results/louvain_cells.png')
-    os.system('rm -r ./figures')
-
-    # Calculate variant presence (%) in each louvain group
-    obs_names = adata.obs['obs_names']
-    result_df = pd.DataFrame(index = list(set(obs_names)), columns = range(len(set(adata.obs['louvain']))))
-    for variant in result_df.index:
-        cluster_nums = [num for flag, num in zip(obs_names == variant, adata.obs['louvain']) if flag]
-        for cluster in set(adata.obs['louvain']):
-           result_df.loc[variant, int(cluster)] = round((np.count_nonzero(pd.Index(cluster_nums) == cluster) / len(cluster_nums)) * 100, 2)
-    print('Variant presence (%) in each louvain group:')
-    display(result_df)
-    result_df.to_csv('./results/louvain_cells.csv')
-    
-    # Transpose and clustering genes
-    print('Clustering genes...')
-    adata = adata.transpose()
-    sc.pp.neighbors(adata)
-    sc.tl.louvain(adata, key_added='louvain')
-    sc.tl.umap(adata)
-    sc.pl.umap(adata, color=['louvain'], s=5, save = '.png')
-    os.system('mv ./figures/umap.png ./results/louvain_genes.png')
-    os.system('rm -r ./figures')
-    print('Number of genes in each louvain group:')
-    display(adata.obs['louvain'].value_counts())
-    adata = adata.transpose()
-
-    with open('./results/louvain_data.pkl', 'wb') as file:
-        pkl.dump(adata, file)
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return adata  # adata is an AnnData object obtained from louvain clustering
+########## HIERARCHIES ANALYSIS ##########
 
 
-def louvain_cells(adata):  # adata is the AnnData object obtained from filter_data function
-    """Louvain clustering of cells, and calculate the variant presence (%) in each louvain group"""
-    start_time = time.time()
-
-    # Louvain clustering
-    sc.pp.neighbors(adata)
-    sc.tl.louvain(adata, key_added='louvain')
-    sc.tl.umap(adata)
-    sc.pl.umap(adata, color=['louvain'], s=1, save = '.png')
-    os.system('mv ./figures/umap.png ./results/louvain_cells.png')
-    os.system('rm -r ./figures')
-
-    # Calculate variant presence (%) in each louvain group
-    obs_names = adata.obs['obs_names']
-    result_df = pd.DataFrame(index = list(set(obs_names)), columns = range(len(set(adata.obs['louvain']))))
-    for variant in result_df.index:
-        cluster_nums = [num for flag, num in zip(obs_names == variant, adata.obs['louvain']) if flag]
-        for cluster in set(adata.obs['louvain']):
-           result_df.loc[variant, int(cluster)] = round((np.count_nonzero(pd.Index(cluster_nums) == cluster) / len(cluster_nums)) * 100, 2)
-    display(result_df)
-    result_df.to_csv('./results/louvain_cells.csv')
-
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return adata  # adata is an AnnData object obtained from louvain clustering
-
-
-def var_umap(adata):  # adata is the AnnData object obtained from previous functions
-    """Plot UMAP by variants"""
-    start_time = time.time()
-    for variant in set(adata.obs['obs_names']):
-        sc.pl.scatter(adata, color='obs_names', groups=[variant, 'WT'], size=40, basis='umap', save = '_%s_WT.png' % variant)
-    os.system('mv ./figures ./results/var_umap')
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-
-
-def louvain_genes(adata):  # adata is the AnnData object obtained from previous functions
-    """Louvain clustering of genes expressions"""
-    start_time = time.time()
-    
-    # Transpose and clustering
-    adata = adata.transpose()
-    sc.pp.neighbors(adata)
-    sc.tl.louvain(adata, key_added='louvain')
-    sc.tl.umap(adata)
-    sc.pl.umap(adata, color=['louvain'], s=5, save = '.png')
-    os.system('mv ./figures/umap.png ./results/louvain_genes.png')
-    os.system('rm -r ./figures')
-    display(adata.obs['louvain'].value_counts())
-
-    with open('./results/louvain_data.pkl', 'wb') as file:
-        pkl.dump(adata.transpose(), file)
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return adata.transpose()  # adata is an AnnData object obtained from louvain clustering
-
-
-def path_gprofiler(data, cond):  # data is the AnnData object obtained from louvain_genes function, or the CSV file obtained from hotnet_analysis function,
-                                 # and cond is a string ('adata' or 'subnetwork_cluster_*' where * is the variants cluster number) to indicate data object type
-    """Pathway enrichment analysis (GO and KEGG) with gprofiler library"""
-    start_time = time.time()
-                              
-    # Generating cluster of genes
-    genes_list = []
-    cluster_list = []
-    if cond == 'adata':
-        cluster_list = list(data.var['louvain'])
-        genes_list = list(data.var['var_names'])
-    elif 'subnetwork_cluster_' in cond:
-        for row in data.index:
-            genes_temp = list(data.loc[row].dropna())
-            genes_list += genes_temp
-            cluster_list += [row for i in range(len(genes_temp))]
-    else: raise ValueError(f'{cond} is not a valid parameter. Write \'adata\' or \'subnetwork_cluster_*\', where * is the variants cluster number.')
-
-    # Running enrichment analysis
-    result_cl = ['native', 'name', 'p_value', 'term_size', 'query_size', 'intersection_size', 'effective_domain_size', 'precision', 'recall', 'intersections', 'cluster']
-    result_df = pd.DataFrame(columns=result_cl)
-    gp = GProfiler(return_dataframe=True)
-    for cluster_num in set(cluster_list):
-        print(f'Running enrichment analysis in cluster {cluster_num}...')
-        cluster_genes = [gene for gene, cluster in zip(genes_list, cluster_list) if cluster == cluster_num]
-        result_temp = gp.profile(organism='hsapiens', query=cluster_genes, sources=['KEGG', 'GO:BP'], no_evidences=False)
-        result_temp['cluster'] = [cluster_num for i in range(len(result_temp.index))]
-        result_df = pd.concat([result_df, result_temp[result_cl]]).reset_index(drop=True)
-    
-    display(result_df)
-    result_df.to_csv(f'./results/path_gprofiler_{cond}.csv', index=None)
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return result_df  # Return dataframe with GO and KEGG annotations of each cluster
-
-
-def path_goatools(data, cond):  # data is the AnnData object obtained from louvain_genes function, or the CSV file obtained from hotnet_analysis function,
-                                # and cond is a string ('adata' or 'subnetwork_cluster_*' where * is the variants cluster number) to indicate data object type
-    """Pathway enrichment analysis with goatools library (WILL BE DEPRECATED)"""
-    start_time = time.time()
-
-    # Generating cluster of genes
-    genes_list = []
-    cluster_list = []
-    if cond == 'adata':
-        cluster_list = list(data.var['louvain'])
-        genes_list = list(data.var['var_names'])
-    elif 'subnetwork_cluster_' in cond:
-        for row in data.index:
-            genes_temp = list(data.loc[row].dropna())
-            genes_list += genes_temp
-            cluster_list += [row for i in range(len(genes_temp))]
-    else: raise ValueError(f'{cond} is not a valid parameter. Write \'adata\' or \'subnetwork_cluster_*\', where * is the variants cluster number.')
-
-    # Loading requirements 
-    gene2go = download_ncbi_associations()           # Download Entrez IDs - GO associations file
-    gobasicobo = download_go_basic_obo()             # Download GO terms info file
-    obodag = GODag(gobasicobo)
-    objanno = Gene2GoReader(gene2go, taxids=[9606])  # Recovering Human Entrez IDs with GO annotations
-    mg = mygene.MyGeneInfo()
-    
-    # Creating genetic background (Human genome)
-    background_list = set()
-    for ns2assoc in objanno.get_ns2assc().values():
-        background_list.update(ns2assoc.keys())
-    background_list = list(background_list)
-    
-    # Setting enrichment analysis
-    goeaobj = GOEnrichmentStudyNS(background_list, objanno.get_ns2assc(), obodag, propagate_counts=False, alpha=0.05, methods=['fdr_bh'])
-    result_df = pd.DataFrame(columns=['GO', 'Term', 'Class', 'p-value', 'p-corrected', 'Genes symbols', 'Group'])
-    for i in set(cluster_list):
-        print(f'\nRunning enrichment analysis in cluster {i}...')
-        cluster_genes = [gene for gene, cluster in zip(genes_list, cluster_list) if cluster == i]
-        
-        # Mapping gene symbols to Entrez (NCBI) IDs
-        symbol_to_entrez = {}
-        query_results = mg.querymany(cluster_genes, scopes='symbol', fields='entrezgene', species='human')
-        for result in query_results:
-            if 'entrezgene' in result: symbol_to_entrez[result['query']] = int(result['entrezgene'])
-        symbol_list = list(symbol_to_entrez.keys())
-        entrez_list = list(symbol_to_entrez.values())
-
-        # Running enrichment analysis
-        goea_results_all = goeaobj.run_study(entrez_list)
-        goea_results_sig = [r for r in goea_results_all if r.p_fdr_bh < 0.05]
-        for x in goea_results_sig:
-            result_df.loc[len(result_df)] = [x.GO, x.goterm.name, x.goterm.namespace, x.p_uncorrected, x.p_fdr_bh, symbol_list, i]
-    
-    display(result_df)
-    result_df.to_csv(f'./results/path_goatools_{cond}.csv', index=None)
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return result_df  # Return dataframe with pathways annotations of each louvain cluster
-
-
-def diff_analysis(adata):  # adata is the AnnData object obtained from previous functions
-    """Differential expression analysis (DEA) with the library PyDESeq2, a Python implementation of the DESeq2 method in R"""
-    start_time = time.time()
-    
-    # Defining variables
-    result_dict = {}
-    inference = DefaultInference()
-    if not os.path.exists('./results/diff_analysis'): os.mkdir('./results/diff_analysis')
-    
-    for variant in set(adata.obs['obs_names']):
-        if variant not in ['WT', 'Null']:
-            # Selecting variants
-            adata_temp = adata[adata.obs['obs_names'].isin(['WT', variant])]
-            adata_temp.obs.reset_index(drop=True, inplace=True)
-            adata_temp.obs['obs_names'].replace(to_replace=['WT', variant], value=['A', 'B'], inplace=True)
-        
-            # Initializing read counts modeling
-            dds = DeseqDataSet(counts=pd.DataFrame(adata_temp.X, columns = adata_temp.var['var_names']), metadata=adata_temp.obs, design_factors='obs_names', refit_cooks=True, inference=inference)
-            dds.deseq2()                                     # Fitting dispersions and log fold changes
-        
-            # Statistical analysis
-            stat_res = DeseqStats(dds, inference=inference)  # Compute p-values using Wald tests and adjusted p-values for differential expresion
-            stat_res.summary()                               # Running the whole statistical analysis, cooks filtering, and multiple testing adjustement
-            result_dict[variant] = stat_res
-    
-    print('Display results of each variant vs WT doing returned_dict[variant].results_df')
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return result_dict  # result_dict is a dict: keys are variants and values are DEA results with regards to WT
-
-def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_analysis function
-    """Plotting the DEA, and saving info only about LFC and p values"""
-    start_time = time.time()
-    lfc_df = pd.DataFrame()
-    padj_df = pd.DataFrame()
-    for variant in adata_dict.keys():
-
-        # Plotting
-        stat_res = adata_dict[variant]
-        stat_res.plot_MA(s=5)
-       #plt.gcf().set_size_inches(8,6)
-        plt.gcf().set_dpi(100)
-        plt.title(variant + '_WT')
-        plt.tight_layout()
-        plt.savefig('./results/diff_analysis/' + variant + '_WT.png', dpi=150)
-        
-        # Saving
-        lfc_df[variant] = stat_res.results_df['log2FoldChange']
-        padj_df[variant] = stat_res.results_df['padj']
-    
-    lfc_df = lfc_df.fillna(0).transpose()  # Set NaN values in LFC dataframe to 0
-    padj_df = padj_df.fillna(1).transpose()  # Set NaN values in p-values dataframe to 1
-    lfc_df.to_csv('./results/diff_analysis/diff_lfc.csv')
-    padj_df.to_csv('./results/diff_analysis/diff_padj.csv')
-    print('For a higher resolution plot of a particular variant, type returned_dict[variant].plot_MA(s=5)')
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return lfc_df, padj_df  # both are dataframes containing LFC and corrected p-values info, respectively
-
-
-def compare_groups(adata, reference):  # adata is the AnnData object obtained from filter_data function,
+def compare_groups(adata, reference):  # adata is the normalized AnnData object obtained from filter_data function,
                                        # reference is a string with the name of the reference group
-    """Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and reference group,
-       deriving an empirical null distribution of those scores, and then calculating the threshold for each method as 5% of desired FDR"""
+    """Calculating Hotelling’s T2 statistic, Pearson score, Spearman value, and L1 linkage between each variant and reference group, deriving
+    an empirical null distribution of those scores, and then calculating and plotting the threshold for each method as 5% of desired FDR"""
     start_time = time.time()
 
     def calculate_metrics(adata_df, adata_pca, reference, variant, obs_names):
@@ -423,12 +175,8 @@ def compare_groups(adata, reference):  # adata is the AnnData object obtained fr
     
         return result_list
 
-    # Calculating first 50 elements in the Principal Component Space
-    print('Calculating first 50 elements in the Principal Component Space...')
-    sc.tl.pca(adata,svd_solver='arpack',n_comps=50)
-    adata.obsm['X_pca'] *= -1
-
     # Setting data
+    adata.obsm['X_pca'] *= -1
     result_df = pd.DataFrame(columns = ['reference', 'variant', 'HotellingT2','bulk.pearson','bulk.spearman','bulk.L1'])
     permuted_df = pd.DataFrame(columns = ['reference', 'variant', 'HotellingT2','bulk.pearson','bulk.spearman','bulk.L1'])
     adata.obs['obs_permuted'] = list(adata.obs['obs_names'])
@@ -499,14 +247,14 @@ def compare_groups(adata, reference):  # adata is the AnnData object obtained fr
 
     scoring_df = combo_df[combo_df['dataset'] == 'true'].drop(columns=['dataset']).reset_index(drop=True)
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return scoring_df
+    return scoring_df  # Dataframe of metric scores calculated for each variant VS reference group. 
 
 
-def plot_dendogram(adata, reference, scoring_df, h2_thresh, color_thresh):    # adata is the AnnData object obtained from filter_data function,
-    """Hierarchical dendogram based on Pearson scores,"""                     # reference is a string with the name of the reference group
-    """and hierarchical clustering based on visual"""                         # scoring_df is the dataframe obtained from compare_groups() function
-    """inspection changing the threshold parameter"""                         # h2_thresh is the HotellingT2 threshold obtained in compute_fdr() function
-    start_time = time.time()                                                  # color_thresh is a float number to change as desired the number of cluster in the dendogram
+def plot_dendogram(adata, reference, scoring_df, h2_thresh, color_thresh):    # adata is the normalized AnnData object obtained from filter_data function,
+    """Hierarchical dendogram based on Pearson scores,"""                     # reference is a string with the name of the reference group,
+    """hierarchical clustering based on visual inspection changing"""         # scoring_df is the dataframe obtained from compare_groups() function,
+    """the threshold parameter, and plotting the heat map"""                  # h2_thresh is the HotellingT2 threshold obtained in compute_fdr() function,
+    start_time = time.time()                                                  # color_thresh is a float number to change as desired the number of clusters in the dendogram
 
     # Hierarchical clustering
     distance_matrix = 1 - scoring_df['bulk.pearson'].abs().values.reshape(-1, 1)
@@ -560,6 +308,128 @@ def plot_dendogram(adata, reference, scoring_df, h2_thresh, color_thresh):    # 
     return scoring_df  # scoring_df now contains a 'cluster' column indicating the group in which the variant is placed
 
 
+########## LOUVAIN ANALYSIS ##########
+
+
+def louvain_clustering(adata, n_pcs, resolution):  # adata is the normalized AnnData object obtained from previous functions
+                                                   # n_pcs is the integer number of Principal Components to use for clustering
+                                                   # resolution is a float number to change as desired the number of resulting clusters
+    """Louvain clustering of cells and genes, and calculate the variant presence (%) in each louvain group"""
+    start_time = time.time()
+
+    # Clustering cells
+    print('Clustering cells...')
+    sc.pp.neighbors(adata, n_pcs=n_pcs)
+    sc.tl.louvain(adata, key_added='louvain', resolution=resolution)
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['louvain'], s=1, save = '.png')
+    os.system('mv ./figures/umap.png ./results/louvain_cells.png')
+    os.system('rm -r ./figures')
+
+    # Calculate variant presence (%) in each louvain group
+    obs_names = adata.obs['obs_names']
+    result_df = pd.DataFrame(index = list(set(obs_names)), columns = range(len(set(adata.obs['louvain']))))
+    for variant in result_df.index:
+        cluster_nums = [num for flag, num in zip(obs_names == variant, adata.obs['louvain']) if flag]
+        for cluster in set(adata.obs['louvain']):
+           result_df.loc[variant, int(cluster)] = round((np.count_nonzero(pd.Index(cluster_nums) == cluster) / len(cluster_nums)) * 100, 2)
+    print('Variant presence (%) in each louvain group:')
+    display(result_df)
+    result_df.to_csv('./results/louvain_cells.csv')
+    
+    # Transpose and clustering genes
+    print('Clustering genes...')
+    adata = adata.transpose()
+    sc.pp.neighbors(adata)
+    sc.tl.louvain(adata, key_added='louvain')
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['louvain'], s=5, save = '.png')
+    os.system('mv ./figures/umap.png ./results/louvain_genes.png')
+    os.system('rm -r ./figures')
+    print('Number of genes in each louvain group:')
+    display(adata.obs['louvain'].value_counts())
+    adata = adata.transpose()
+
+    with open('./results/normalized_data.pkl', 'wb') as file:
+        pkl.dump(adata, file)
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return adata  # adata is an AnnData object obtained from louvain clustering
+
+
+def var_umap(adata):  # adata is the AnnData object obtained from previous functions
+    """Plot UMAP by variants"""
+    start_time = time.time()
+    for variant in set(adata.obs['obs_names']):
+        sc.pl.scatter(adata, color='obs_names', groups=[variant, 'WT'], size=40, basis='umap', save = '_%s_WT.png' % variant)
+    os.system('mv ./figures ./results/var_umap')
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+
+
+########## DIFFERENTIAL EXPRESSION ANALYSIS (DEA) ##########
+
+
+def diff_analysis(adata):  # adata is the non-normalized AnnData object obtained from the filter_data() function
+    """Differential expression analysis (DEA) with the library PyDESeq2, a Python implementation of the DESeq2 method in R"""
+    start_time = time.time()
+    
+    # Defining variables
+    result_dict = {}
+    inference = DefaultInference()
+    if not os.path.exists('./results/diff_analysis'): os.mkdir('./results/diff_analysis')
+    
+    for variant in set(adata.obs['obs_names']):
+        if variant not in ['WT', 'Null']:
+            # Selecting variants
+            adata_temp = adata[adata.obs['obs_names'].isin(['WT', variant])]
+            adata_temp.obs.reset_index(drop=True, inplace=True)
+            adata_temp.obs['obs_names'].replace(to_replace=['WT', variant], value=['A', 'B'], inplace=True)
+        
+            # Initializing read counts modeling
+            dds = DeseqDataSet(counts=pd.DataFrame(adata_temp.X, columns = adata_temp.var['var_names']), metadata=adata_temp.obs, design_factors='obs_names', refit_cooks=True, inference=inference)
+            dds.deseq2()                                     # Fitting dispersions and log fold changes
+        
+            # Statistical analysis
+            stat_res = DeseqStats(dds, inference=inference)  # Compute p-values using Wald tests and adjusted p-values for differential expresion
+            stat_res.summary()                               # Running the whole statistical analysis, cooks filtering, and multiple testing adjustement
+            result_dict[variant] = stat_res
+    
+    print('Display results of each variant vs WT doing returned_dict[variant].results_df')
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return result_dict  # result_dict is a dict: keys are variants and values are DEA results with regards to WT
+
+
+def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_analysis function
+    """Plotting the DEA, and saving info only about LFC and p values"""
+    start_time = time.time()
+    lfc_df = pd.DataFrame()
+    padj_df = pd.DataFrame()
+    for variant in adata_dict.keys():
+
+        # Plotting
+        stat_res = adata_dict[variant]
+        stat_res.plot_MA(s=5)
+       #plt.gcf().set_size_inches(8,6)
+        plt.gcf().set_dpi(100)
+        plt.title(variant + '_WT')
+        plt.tight_layout()
+        plt.savefig('./results/diff_analysis/' + variant + '_WT.png', dpi=150)
+        
+        # Saving
+        lfc_df[variant] = stat_res.results_df['log2FoldChange']
+        padj_df[variant] = stat_res.results_df['padj']
+    
+    lfc_df = lfc_df.fillna(0).transpose()  # Set NaN values in LFC dataframe to 0
+    padj_df = padj_df.fillna(1).transpose()  # Set NaN values in p-values dataframe to 1
+    lfc_df.to_csv('./results/diff_analysis/diff_lfc.csv')
+    padj_df.to_csv('./results/diff_analysis/diff_padj.csv')
+    print('For a higher resolution plot of a particular variant, type returned_dict[variant].plot_MA(s=5)')
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return lfc_df, padj_df  # both are dataframes containing LFC and corrected p-values info, respectively
+
+
+########## NETWORK ANALYSIS ##########
+
+
 def lfc_cluster(lfc_df, padj_df, scoring_df, thresh, perb_gene):  # lfc_df is the dataframe with LFC info obtained from plot_dea() function
                                                                   # padj_df is the dataframe with corrected p-values obtained from plot_dea() function
                                                                   # scoring_df is the dataframe with cluster info obtained from plot_dendogram() function
@@ -572,46 +442,37 @@ def lfc_cluster(lfc_df, padj_df, scoring_df, thresh, perb_gene):  # lfc_df is th
     
         # Getting cluster info 
         print('Cluster %s' % str(cluster))
-        cluster_df = lfc_df[scoring_df['cluster'] == cluster]
-        cond = max(len(cluster_df.index) * thresh, 2)
-        genes_df = (padj_df < 0.05).loc[cluster_df.index].sum() >= cond
+        lfc_temp = lfc_df[scoring_df['cluster'] == cluster]
+        cond = max(len(lfc_temp.index) * thresh, 2)
+        genes_df = (padj_df < 0.05).loc[lfc_temp.index].sum() >= cond
         genes_list = list(genes_df[genes_df].index)
         if len(genes_list) != 0: genes_list.append(perb_gene)
-        final_df = lfc_df.loc[cluster_df.index, genes_list]
+        cluster_df = lfc_df.loc[lfc_temp.index, genes_list]
+        cluster_df.columns.name = 'genes_names'
+        pd.DataFrame(cluster_df.mean(), columns = [f'lfc_cluster{cluster}']).to_csv(f'./results/lfc_cluster{cluster}.csv')
     
-        # Plotting data
-        if final_df.shape[1] == 0: print('No significant genes found across %.2f of variants. Maybe cluster %s contains variants similar to WT?' % (thresh, str(cluster)))
+        # Plotting cluster heat map
+        if cluster_df.shape[1] == 0: print('No significant genes found across %.2f of variants. Maybe cluster %s contains variants similar to WT?' % (thresh, str(cluster)))
         else:
-            condition = '0'
-            while condition == '0':
-                plt.figure(figsize=(10, 6))
-                font_size = min(max(10 - (final_df.shape[0] // 10) - (final_df.shape[1] // 10), 4), 10)
-                sns.heatmap(final_df, annot=True, cmap='coolwarm', center=0, annot_kws={"size": font_size})
-                plt.title('LFC Heatmap of significantly expressed genes appearing in all variants')
-                plt.xlabel('Genes')
-                plt.ylabel('Variants')
-                plt.xticks(fontsize=font_size * 1.2)
-                plt.yticks(fontsize=font_size * 1.2)
-                plt.show()
+            x = 2
+            heat_map = sns.clustermap(cluster_df.transpose(), row_cluster=True, col_cluster=False, figsize=(20,20), cmap='bwr',vmin=-x,vmax=x, cbar_pos=(0.75, 0.85, 0.15, 0.05), cbar_kws={'orientation':'horizontal', "label": "LFC value", 'ticks':[-x,0,x]})
+            heat_map.ax_heatmap.set_xlabel('Variants')
+            heat_map.ax_heatmap.set_ylabel('Genes')
+            plt.show()
+
+            # Calculating coefficient of variation
+            mean_series = cluster_df.mean(axis=0)
+            std_series = cluster_df.std(axis=0)
+            cv_series = ((std_series / mean_series) * 100).abs().round(decimals=2)
+            cv_df = pd.DataFrame(cv_series[cv_series > 30], columns=['CV']).sort_values(by='CV', ascending=False).transpose()
+            print('%i genes of %i genes with CV > 30%%' % (len(cv_df.columns), len(cv_series)))
+            display(cv_df)
         
-                # Filtering variants
-                condition = str(input('Introduce 0 if you want to filter some variants:'))
-                if condition == '0':
-                    variants_list = input('Introduce variants names to filter separated by commas:').split(',')
-                    if len(variants_list) != 0:
-                        for variant in variants_list: 
-                            if variant not in final_df.index:
-                                print(variant, 'variant not found')
-                                variants_list.remove(variant)
-                        final_df = final_df.loc[final_df.index.drop(variants_list)]
-    
-            final_df.columns.name = 'genes_names'
-            pd.DataFrame(final_df.mean(), columns = ['lfc_cluster%s' % str(cluster)]).to_csv('./results/lfc_cluster%s.csv' % str(cluster))
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
 
 
-def hotnet_analysis(nodes_df, edges_df, lfc_df, scoring_df, wt_cluster):  # nodes_df and edges_df are dataframes containing info about the nodes and edges, respectively, of the constructed network in Cytoscape using STRING
-                                                                          # lfc_df and scoring_df are dataframes obtained from plot_dea() and plot_dendogram() functions, respectively
+def hotnet_analysis(nodes_df, edges_df, padj_df, scoring_df, wt_cluster):  # nodes_df and edges_df are dataframes containing info about the nodes and edges, respectively, of the constructed network in Cytoscape using STRING
+                                                                          # padj_df and scoring_df are dataframes obtained from plot_dea() and plot_dendogram() functions, respectively
                                                                           # wt_cluster is the integer number referring to the Wild type cluster
     """Implementation of Hierarchical HotNet algorithm (https://doi.org/10.1093/bioinformatics/bty613) to find significantly altered subnetworks in each cluster"""
 
@@ -643,7 +504,7 @@ def hotnet_analysis(nodes_df, edges_df, lfc_df, scoring_df, wt_cluster):  # node
     # Generating scores files
     for cluster in cluster_dict.keys():
         for variant in cluster_dict[cluster]:
-            if not os.path.exists(f'{path}/data/scores_{variant}.tsv'): lfc_df.loc[variant].to_csv(f'{path}/data/scores_{variant}.tsv', sep="\t", header=False)
+            if not os.path.exists(f'{path}/data/scores_{variant}.tsv'): (-np.log10(padj_df.loc[variant])).abs().to_csv(f'{path}/data/scores_{variant}.tsv', sep="\t", header=False)
             if not os.path.exists(f'{path}/intermediate/network_score_{variant}'): os.makedirs(f'{path}/intermediate/network_score_{variant}')
 
     # Constructing similarity matrices
@@ -738,3 +599,41 @@ def hotnet_analysis(nodes_df, edges_df, lfc_df, scoring_df, wt_cluster):  # node
 
     print(f'Consensus nodes and edges altered in each cluster saved in {path}/results/')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
+
+
+########## PATHWAY ENRICHMENT ANALYSIS ##########
+
+
+def path_gprofiler(data, cond):  # data is the AnnData object obtained from louvain_genes function, or the CSV file obtained from hotnet_analysis function,
+                                 # and cond is a string ('adata' or 'subnetwork_cluster_*' where * is the variants cluster number) to indicate data object type
+    """Pathway enrichment analysis (GO and KEGG) with gprofiler library"""
+    start_time = time.time()
+                              
+    # Generating cluster of genes
+    genes_list = []
+    cluster_list = []
+    if cond == 'adata':
+        cluster_list = list(data.var['louvain'])
+        genes_list = list(data.var['var_names'])
+    elif 'subnetwork_cluster_' in cond:
+        for row in data.index:
+            genes_temp = list(data.loc[row].dropna())
+            genes_list += genes_temp
+            cluster_list += [row for i in range(len(genes_temp))]
+    else: raise ValueError(f'{cond} is not a valid parameter. Write \'adata\' or \'subnetwork_cluster_*\', where * is the variants cluster number.')
+
+    # Running enrichment analysis
+    result_cl = ['native', 'name', 'p_value', 'term_size', 'query_size', 'intersection_size', 'effective_domain_size', 'precision', 'recall', 'intersections', 'cluster']
+    result_df = pd.DataFrame(columns=result_cl)
+    gp = GProfiler(return_dataframe=True)
+    for cluster_num in set(cluster_list):
+        print(f'Running enrichment analysis in cluster {cluster_num}...')
+        cluster_genes = [gene for gene, cluster in zip(genes_list, cluster_list) if cluster == cluster_num]
+        result_temp = gp.profile(organism='hsapiens', query=cluster_genes, sources=['KEGG', 'GO:BP'], no_evidences=False)
+        result_temp['cluster'] = [cluster_num for i in range(len(result_temp.index))]
+        result_df = pd.concat([result_df, result_temp[result_cl]]).reset_index(drop=True)
+    
+    display(result_df)
+    result_df.to_csv(f'./results/path_gprofiler_{cond}.csv', index=None)
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    return result_df  # Return dataframe with GO and KEGG annotations of each cluster
