@@ -25,7 +25,7 @@ import perturbseq_analysis as pseq
 - [Differential expression analysis (DEA)](#Differential-expression-analysis-DEA)
   - [Running DEA](#Running-DEA)
   - [Plotting DEA results](#Plotting-DEA-results)
-- [Network analysis](#-Network-analysis)
+- [Network analysis](#Network-analysis)
   - [Merging LFC info per cluster](#Merging-LFC-info-per-cluster)
   - [Finding significantly altered subnetworks in each cluster](#Finding-significantly-altered-subnetworks-in-each-cluster)
 - [Pathway enrichment analysis](#Pathway-enrichment-analysis)
