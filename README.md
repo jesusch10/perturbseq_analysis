@@ -22,13 +22,13 @@ import perturbseq_analysis as pseq
 - [Louvain analysis](#Louvain-analysis)
   - [Louvain clustering](#Louvain-clustering)
   - [UMAP by variants](#UMAP-by-variants)
-- [Pathway enrichment analysis](#Pathway-enrichment-analysis)
 - [Differential expression analysis (DEA)](#Differential-expression-analysis-DEA)
   - [Running DEA](#Running-DEA)
   - [Plotting DEA results](#Plotting-DEA-results)
 - [Network analysis](#-Network-analysis)
   - [Merging LFC info per cluster](#Merging-LFC-info-per-cluster)
   - [Finding significantly altered subnetworks in each cluster](#Finding-significantly-altered-subnetworks-in-each-cluster)
+- [Pathway enrichment analysis](#Pathway-enrichment-analysis)
 
 ## Filtering data:
 · Plotting some raw statistics (so the user can decide some filters).  
