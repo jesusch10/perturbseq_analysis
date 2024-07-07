@@ -152,7 +152,6 @@ It returns a dataframe with GO and KEGG annotations of each cluster (also saved 
 # Updates:
 · Function `hotnet_analysis()` now uses LFC values (transformed to absolute scores) and q-values (transformed to logarithmic scale of 10) as scores, and creates two groups (one per type of score) of significantly altered consensus subnetworks per cluster of variants.  
 · Function `lfc_cluster()` now is called `clusnet_analysis()`, and conserves previous tasks, not to create a new network of just significantly expressed genes, but to process the output of hotnet_analysis() function by performing consensus (intersection) of the two groups (one per type of score) significantly altered consensus subnetworks per cluster of variants.  
-perform consensus between the two groups (LFC and q scores) consensus 
 · Function `path_gprofiler()` now takes a dict of cluster of genes, and verbosity can be controlled.  
 
 
