@@ -17,6 +17,8 @@ import spm1d
 from scipy.stats import pearsonr
 from scipy.stats import spearmanr
 from tqdm.notebook import tqdm
+import networkx as nx
+import sys
 
 
 ########## FILTERING DATA ##########
@@ -430,50 +432,10 @@ def plot_dea(adata_dict):  # result_dict is the dict obtained from the diff_anal
 ########## NETWORK ANALYSIS ##########
 
 
-def lfc_cluster(lfc_df, padj_df, scoring_df, thresh, perb_gene):  # lfc_df is the dataframe with LFC info obtained from plot_dea() function
-                                                                  # padj_df is the dataframe with corrected p-values obtained from plot_dea() function
-                                                                  # scoring_df is the dataframe with cluster info obtained from plot_dendogram() function
-                                                                  # thresh is the fraction (float 0-1) of variants of same cluster a gene must be significant in
-                                                                  # per_genes is a string with the name of the perturbed gene
-    """Creating CSV for Cytoscape with LFC info from significant genes appearing in all variants of the same cluster"""
-    start_time = time.time()
-    scoring_df = scoring_df.set_index('variant')
-    for cluster in set(scoring_df['cluster']):
-    
-        # Getting cluster info 
-        print('Cluster %s' % str(cluster))
-        lfc_temp = lfc_df[scoring_df['cluster'] == cluster]
-        cond = max(len(lfc_temp.index) * thresh, 2)
-        genes_df = (padj_df < 0.05).loc[lfc_temp.index].sum() >= cond
-        genes_list = list(genes_df[genes_df].index)
-        if len(genes_list) != 0: genes_list.append(perb_gene)
-        cluster_df = lfc_df.loc[lfc_temp.index, genes_list]
-        cluster_df.columns.name = 'genes_names'
-        pd.DataFrame(cluster_df.mean(), columns = [f'lfc_cluster{cluster}']).to_csv(f'./results/lfc_cluster{cluster}.csv')
-    
-        # Plotting cluster heat map
-        if cluster_df.shape[1] == 0: print('No significant genes found across %.2f of variants. Maybe cluster %s contains variants similar to WT?' % (thresh, str(cluster)))
-        else:
-            x = 2
-            heat_map = sns.clustermap(cluster_df.transpose(), row_cluster=True, col_cluster=False, figsize=(20,20), cmap='bwr',vmin=-x,vmax=x, cbar_pos=(0.75, 0.85, 0.15, 0.05), cbar_kws={'orientation':'horizontal', "label": "LFC value", 'ticks':[-x,0,x]})
-            heat_map.ax_heatmap.set_xlabel('Variants')
-            heat_map.ax_heatmap.set_ylabel('Genes')
-            plt.show()
-
-            # Calculating coefficient of variation
-            mean_series = cluster_df.mean(axis=0)
-            std_series = cluster_df.std(axis=0)
-            cv_series = ((std_series / mean_series) * 100).abs().round(decimals=2)
-            cv_df = pd.DataFrame(cv_series[cv_series > 30], columns=['CV']).sort_values(by='CV', ascending=False).transpose()
-            print('%i genes of %i genes with CV > 30%%' % (len(cv_df.columns), len(cv_series)))
-            display(cv_df)
-        
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
-
-
-def hotnet_analysis(nodes_df, edges_df, padj_df, scoring_df, wt_cluster):  # nodes_df and edges_df are dataframes containing info about the nodes and edges, respectively, of the constructed network in Cytoscape using STRING
-                                                                          # padj_df and scoring_df are dataframes obtained from plot_dea() and plot_dendogram() functions, respectively
-                                                                          # wt_cluster is the integer number referring to the Wild type cluster
+def hotnet_analysis(nodes_df, edges_df, lfc_df, padj_df, scoring_df, wt_cluster):  # nodes_df and edges_df are dataframes containing info about the nodes and edges, respectively, of the constructed network in Cytoscape using STRING
+                                                                                   # lfc_df and padj_df are the dataframes obtained from plot_dea() function
+                                                                                   # scoring_df is the dataframe obtained from plot_dendogram() function
+                                                                                   # wt_cluster is the integer number referring to the Wild type cluster
     """Implementation of Hierarchical HotNet algorithm (https://doi.org/10.1093/bioinformatics/bty613) to find significantly altered subnetworks in each cluster"""
 
     # Setting environment
@@ -483,6 +445,9 @@ def hotnet_analysis(nodes_df, edges_df, padj_df, scoring_df, wt_cluster):  # nod
     if not os.path.exists(f'{path}/data'): os.makedirs(f'{path}/data')
     if not os.path.exists(f'{path}/intermediate/network'): os.makedirs(f'{path}/intermediate/network')
     if not os.path.exists(f'{path}/results'): os.makedirs(f'{path}/results')
+    scores_type = ['lfc_scores', 'padj_scores']
+    for type in scores_type:
+        if not os.path.exists(f'{path}/results/{type}'): os.makedirs(f'{path}/results/{type}')
     num_perm = 10
     cluster_dict = {}
     scoring_df = scoring_df.set_index('variant')
@@ -502,138 +467,230 @@ def hotnet_analysis(nodes_df, edges_df, padj_df, scoring_df, wt_cluster):  # nod
         edges_df.replace(nodes_dict).to_csv(f'{path}/data/network_edges.tsv', sep="\t", index=False, header=False)
 
     # Generating scores files
-    for cluster in cluster_dict.keys():
-        for variant in cluster_dict[cluster]:
-            if not os.path.exists(f'{path}/data/scores_{variant}.tsv'): (-np.log10(padj_df.loc[variant])).abs().to_csv(f'{path}/data/scores_{variant}.tsv', sep="\t", header=False)
-            if not os.path.exists(f'{path}/intermediate/network_score_{variant}'): os.makedirs(f'{path}/intermediate/network_score_{variant}')
+    for cluster, variant_list in cluster_dict.items():
+        for variant in variant_list:
+            if not os.path.exists(f'{path}/data/lfc_scores_{variant}.tsv'): lfc_df.loc[variant].abs().to_csv(f'{path}/data/lfc_scores_{variant}.tsv', sep="\t", header=False)
+            if not os.path.exists(f'{path}/data/padj_scores_{variant}.tsv'): (-np.log10(padj_df.loc[variant])).abs().to_csv(f'{path}/data/padj_scores_{variant}.tsv', sep="\t", header=False)
+            if not os.path.exists(f'{path}/intermediate/network_scores_{variant}'): os.makedirs(f'{path}/intermediate/network_scores_{variant}')
+            for type in scores_type:
+                if not os.path.exists(f'{path}/intermediate/network_scores_{variant}/{type}'): os.makedirs(f'{path}/intermediate/network_scores_{variant}/{type}')
 
     # Constructing similarity matrices
-    if os.path.exists(f'{path}/intermediate/network/similarity_matrix.h5') and os.path.exists(f'{path}/intermediate/network/beta.txt'): print('Similarity matrices already constructed')
-    else:
-        print('Constructing similarity matrices...')
-        os.system(f'python ./hotnet/construct_similarity_matrix.py -i {path}/data/network_edges.tsv -o {path}/intermediate/network/similarity_matrix.h5 -bof {path}/intermediate/network/beta.txt')
+    print('Constructing similarity matrices...')
+    if not os.path.exists(f'{path}/intermediate/network/similarity_matrix.h5') or not os.path.exists(f'{path}/intermediate/network/beta.txt'):
+        os.system(f'python ./hotnet/construct_similarity_matrix.py -i {path}/data/network_edges.tsv -o {path}/intermediate/network/similarity_matrix.h5 \
+        -bof {path}/intermediate/network/beta.txt')
     
     # Permuting networks
-    cond = True
-    for i in range(1, 9):
-        if not os.path.exists(f'{path}/intermediate/network/edge_list_{i}.tsv'): cond = False
-    if cond: print('Networks already permuted')
-    else: 
-        print('Permuting networks...')
-        os.system(f'cp {path}/data/network_nodes.tsv {path}/intermediate/network/index_gene_0.tsv')
-        os.system(f'cp {path}/data/network_edges.tsv {path}/intermediate/network/edge_list_0.tsv')
-        for i in range(1, 5):  # Preserve connectivity of the observed graph
-            os.system(f'python ./hotnet/permute_network.py -i {path}/intermediate/network/edge_list_0.tsv -s {i} -c -o {path}/intermediate/network/edge_list_{i}.tsv')
-        for i in range(5, 9):  # Do not preserve connectivity of the observed graph
-            os.system(f'python ./hotnet/permute_network.py -i {path}/intermediate/network/edge_list_0.tsv -s {i} -o {path}/intermediate/network/edge_list_{i}.tsv')
+    print('Permuting networks...')
+    if not os.path.exists(f'{path}/intermediate/network/index_gene_0.tsv'): os.system(f'cp {path}/data/network_nodes.tsv \
+    {path}/intermediate/network/index_gene_0.tsv')
+    if not os.path.exists(f'{path}/intermediate/network/edge_list_0.tsv'): os.system(f'cp {path}/data/network_edges.tsv \
+    {path}/intermediate/network/edge_list_0.tsv')
+    for i in range(1, 5):  # Preserve connectivity of the observed graph
+        if not os.path.exists(f'{path}/intermediate/network/edge_list_{i}.tsv'):
+            os.system(f'python ./hotnet/permute_network.py -i {path}/intermediate/network/edge_list_0.tsv -s {i} -c \
+            -o {path}/intermediate/network/edge_list_{i}.tsv')
+    for i in range(5, 9):  # Do not preserve connectivity of the observed graph
+        if not os.path.exists(f'{path}/intermediate/network/edge_list_{i}.tsv'):
+            os.system(f'python ./hotnet/permute_network.py -i {path}/intermediate/network/edge_list_0.tsv -s {i} \
+            -o {path}/intermediate/network/edge_list_{i}.tsv')
 
     # Permuting scores
-    cond = True
-    for cluster in cluster_dict.keys():
-        for variant in cluster_dict[cluster]:
-            if not os.path.exists(f'{path}/intermediate/network_score_{variant}/scores_0.tsv') or not os.path.exists(f'{path}/intermediate/network_score_{variant}/score_bins.tsv'): cond = False
-            for i in range(1, num_perm + 1):
-                if not os.path.exists(f'{path}/intermediate/network_score_{variant}/scores_{i}.tsv'): cond = False
-    if cond: print('Scores already permuted')
-    else: 
-        print('Permuting scores...')
-        for cluster in cluster_dict.keys():
-            for variant in cluster_dict[cluster]:
-                os.system(f'cp {path}/data/scores_{variant}.tsv {path}/intermediate/network_score_{variant}/scores_0.tsv')
-                os.system(f'python ./hotnet/find_permutation_bins.py -gsf {path}/intermediate/network_score_{variant}/scores_0.tsv -igf {path}/data/network_nodes.tsv \
-                -elf {path}/data/network_edges.tsv -ms  1000 -o {path}/intermediate/network_score_{variant}/score_bins.tsv')
+    print('Permuting scores...')
+    for cluster, variant_list in cluster_dict.items():
+        for variant in variant_list:
+            for type in scores_type:
+                if not os.path.exists(f'{path}/intermediate/network_scores_{variant}/{type}/scores_bins.tsv'):
+                    os.system(f'cp {path}/data/{type}_{variant}.tsv {path}/intermediate/network_scores_{variant}/{type}/scores_0.tsv')
+                    os.system(f'python ./hotnet/find_permutation_bins.py -gsf {path}/intermediate/network_scores_{variant}/{type}/scores_0.tsv -igf \
+                    {path}/data/network_nodes.tsv -elf {path}/data/network_edges.tsv -ms  1000 -o \
+                    {path}/intermediate/network_scores_{variant}/{type}/scores_bins.tsv')
                 for i in range(1, num_perm + 1):
-                    os.system(f'python ./hotnet/permute_scores.py -i  {path}/intermediate/network_score_{variant}/scores_0.tsv \
-                    -bf {path}/intermediate/network_score_{variant}/score_bins.tsv -s  {i} -o {path}/intermediate/network_score_{variant}/scores_{i}.tsv')
+                    if not os.path.exists(f'{path}/intermediate/network_scores_{variant}/{type}/scores_{i}.tsv'):
+                        os.system(f'python ./hotnet/permute_scores.py -i  {path}/intermediate/network_scores_{variant}/{type}/scores_0.tsv \
+                        -bf {path}/intermediate/network_scores_{variant}/{type}/scores_bins.tsv -s  {i} -o \
+                        {path}/intermediate/network_scores_{variant}/{type}/scores_{i}.tsv')
 
     # Constructing hierarchies...
-    cond = True
-    for cluster in cluster_dict.keys():
-        for variant in cluster_dict[cluster]:
-            for i in range(num_perm + 1):
-                if not os.path.exists(f'{path}/intermediate/network_score_{variant}/hierarchy_edge_list_{i}.tsv') or not os.path.exists(f'{path}/intermediate/network_score_{variant}/hierarchy_index_gene_{i}.tsv'): cond = False
-    if cond: print('Hierarchies already constructed')
-    else: 
-        print('Constructing hierarchies...')
-        for cluster in cluster_dict.keys():
-            for variant in cluster_dict[cluster]:
+    print('Constructing hierarchies...')
+    for cluster, variant_list in cluster_dict.items():
+        for variant in variant_list:
+            for type in scores_type:
                 for i in range(num_perm + 1):
-                    if not os.path.exists(f'{path}/intermediate/network_score_{variant}/hierarchy_edge_list_{i}.tsv') or not os.path.exists(f'{path}/intermediate/network_score_{variant}/hierarchy_index_gene_{i}.tsv'):
-                        os.system(f'python ./hotnet/construct_hierarchy.py -smf  {path}/intermediate/network/similarity_matrix.h5 -igf  {path}/data/network_nodes.tsv \
-                    -gsf  {path}/intermediate/network_score_{variant}/scores_{i}.tsv -helf {path}/intermediate/network_score_{variant}/hierarchy_edge_list_{i}.tsv -higf {path}/intermediate/network_score_{variant}/hierarchy_index_gene_{i}.tsv')
+                    if not os.path.exists(f'{path}/intermediate/network_scores_{variant}/{type}/hierarchy_edge_list_{i}.tsv') or not os.path.exists(f'{path}/intermediate/network_scores_{variant}/{type}/hierarchy_index_gene_{i}.tsv'):
+                        os.system(f'python ./hotnet/construct_hierarchy.py -smf  {path}/intermediate/network/similarity_matrix.h5 -igf \
+                        {path}/data/network_nodes.tsv -gsf  {path}/intermediate/network_scores_{variant}/{type}/scores_{i}.tsv -helf \
+                        {path}/intermediate/network_scores_{variant}/{type}/hierarchy_edge_list_{i}.tsv -higf \
+                        {path}/intermediate/network_scores_{variant}/{type}/hierarchy_index_gene_{i}.tsv')
 
     # Processing hierarchies...
-    cond = True
-    for cluster in cluster_dict.keys():
-        for variant in cluster_dict[cluster]:
-            if not os.path.exists(f'{path}/results/clusters_network_scores_{variant}.tsv') or not os.path.exists(f'{path}/results/sizes_network_scores_{variant}.pdf'): cond = False
-    if cond: print('Hierarchies already processed')
-    else: 
-        print('Processing hierarchies...')
-        for cluster in cluster_dict.keys():
-            for variant in cluster_dict[cluster]:
-                os.system(f'python ./hotnet/process_hierarchies.py -oelf {path}/intermediate/network_score_{variant}/hierarchy_edge_list_0.tsv -oigf {path}/intermediate/network_score_{variant}/hierarchy_index_gene_0.tsv \
-                -pelf $(for i in `seq {num_perm}`; do echo " {path}/intermediate/network_score_{variant}/hierarchy_edge_list_"$i".tsv "; done) -pigf $(for i in `seq {num_perm}`; do echo " {path}/intermediate/network_score_{variant}/hierarchy_index_gene_"$i".tsv "; done) \
-                -lsb  1 -cf {path}/results/clusters_network_scores_{variant}.tsv -pl network scores_{variant} -pf {path}/results/sizes_network_scores_{variant}.pdf')
+    print('Processing hierarchies...')
+    for cluster, variant_list in cluster_dict.items():
+        for variant in variant_list:
+            for type in scores_type:
+                if not os.path.exists(f'{path}/results/{type}/clusters_network_scores_{variant}.tsv') or not os.path.exists(f'{path}/results/{type}/sizes_network_scores_{variant}.pdf'):
+                    os.system(f'python ./hotnet/process_hierarchies.py -oelf {path}/intermediate/network_scores_{variant}/{type}/hierarchy_edge_list_0.tsv \
+                    -oigf {path}/intermediate/network_scores_{variant}/{type}/hierarchy_index_gene_0.tsv \
+                    -pelf $(for i in `seq {num_perm}`; do echo " {path}/intermediate/network_scores_{variant}/{type}/hierarchy_edge_list_"$i".tsv "; done) \
+                    -pigf $(for i in `seq {num_perm}`; do echo " {path}/intermediate/network_scores_{variant}/{type}/hierarchy_index_gene_"$i".tsv "; done)\
+                    -lsb  1 -cf {path}/results/{type}/clusters_network_scores_{variant}.tsv -pl network {type}_{variant} \
+                    -pf {path}/results/{type}/sizes_network_scores_{variant}.pdf')
 
-    # Performing consensus in each cluster...
-    cond = True
-    for cluster in cluster_dict.keys():
-        if not os.path.exists(f'{path}/results/consensus_nodes_cluster_{cluster}.tsv') or not os.path.exists(f'{path}/results/consensus_edges_cluster_{cluster}.tsv'): cond = False
-    if cond: print('Consensus already performed')
-    else:
-        print('Performing consensus...')
-        for cluster in cluster_dict.keys():
-            cluster_list = cluster_dict[cluster]
-            cf = ' '.join([f'{path}/results/clusters_network_scores_{variant}.tsv' for variant in cluster_list])
-            igf = ' '.join([f'{path}/data/network_nodes.tsv' for i in range(len(cluster_list))])
-            elf = ' '.join([f'{path}/data/network_edges.tsv' for i in range(len(cluster_list))])
-            n = ' '.join(['network' for i in range(len(cluster_list))])
-            s = ' '.join([f'score_{variant}' for variant in cluster_list])
-            os.system(f'python ./hotnet/perform_consensus.py -cf {cf} -igf {igf} -elf {elf} -n {n} -s {s} -t 2 -cnf {path}/results/consensus_nodes_cluster_{cluster}.tsv -cef {path}/results/consensus_edges_cluster_{cluster}.tsv')
-            consensus_list = []
-            consensus_df = pd.read_csv(f'{path}/results/consensus_nodes_cluster_{cluster}.tsv', sep='\t', header=None)
-            for row in consensus_df.index:
-                consensus_list += list(consensus_df.loc[row].dropna())
-            pd.DataFrame({'consensus_nodes': consensus_list}).to_csv(f'{path}/results/consensus_nodes_cluster_{cluster}.txt', index=None)
+    # Performing consensus in each variant...
+    print('Performing consensus...')
+    for cluster, variant_list in cluster_dict.items():
+        igf = ' '.join([f'{path}/data/network_nodes.tsv' for i in range(len(variant_list))])
+        elf = ' '.join([f'{path}/data/network_edges.tsv' for i in range(len(variant_list))])
+        n = ' '.join(['network' for i in range(len(variant_list))])
+        for type in scores_type:
+            if not os.path.exists(f'{path}/results/{type}/consensus_nodes_cluster_{cluster}.tsv') or not os.path.exists(f'{path}/results/{type}/consensus_edges_cluster_{cluster}.tsv'):
+                cf = ' '.join([f'{path}/results/{type}/clusters_network_scores_{variant}.tsv' for variant in variant_list])
+                s = ' '.join([f'{type}_{variant}' for variant in variant_list])
+                os.system(f'python ./hotnet/perform_consensus.py -cf {cf} -igf {igf} -elf {elf} -n {n} -s {s} -t 2 \
+                -cnf {path}/results/{type}/consensus_nodes_cluster_{cluster}.tsv -cef {path}/results/{type}/consensus_edges_cluster_{cluster}.tsv')
 
-    print(f'Consensus nodes and edges altered in each cluster saved in {path}/results/')
+    print(f'Finished! Consensus nodes and edges altered in each variant saved in {path}/results/')
+    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+
+
+def clusnet_analysis(nodes_raw, edges_raw, lfc_df, padj_df, scoring_df, wt_cluster, thresh, perb_gene):  # Parameters are the same as hotnet_analysis function, except:
+                                                                                                         # thresh is the fraction (float 0-1) of variants of same cluster a gene must be significant in
+                                                                                                         # perb_gene is a string with the name of the perturbed gene
+    """Retrieving the intersection of padj and lfc consensus subnetworks, annotating subnetworks with path_gprofiler() function, adding the shortest
+    interactor paths between disconnected subnetworks, and finding significant genes appearing in a certain number of variants of the same cluster"""
+    start_time = time.time()
+    path = './results/hotnet_output'
+    scores_type = ['lfc_scores', 'padj_scores']
+    scoring_df = scoring_df.set_index('variant')
+    interactor_perb = False
+    for cluster in set(scoring_df['cluster']):
+        if cluster != wt_cluster:
+            
+            # Saving significant lfc values
+            print('Cluster %s' % str(cluster))
+            lfc_temp = lfc_df[scoring_df['cluster'] == cluster]
+            cond = max(len(lfc_temp.index) * thresh, 2)
+            sign_counts = (padj_df < 0.05).loc[lfc_temp.index].sum()
+            genes_df =  sign_counts >= cond
+            genes_list = list(genes_df[genes_df].index)
+            cluster_df = lfc_df.loc[lfc_temp.index, genes_list]
+            cluster_df.columns.name = 'genes names'
+            pd.DataFrame(cluster_df.mean(), columns = ['significant lfc']).to_csv(f'{path}/results/consensus_lfc_cluster_{cluster}.csv')
+    
+            # Retrieving intersection of lfc and padj consensus subnetworks
+            if not os.path.exists(f'{path}/results/{scores_type[0]}/consensus_edges_cluster_{cluster}.tsv') or not os.path.exists(f'{path}/results/{scores_type[1]}/consensus_edges_cluster_{cluster}.tsv'):
+                print('Consensus files from Hotnet analysis not found!')
+                sys.exit()
+            edges_lfc = pd.read_csv(f'{path}/results/{scores_type[0]}/consensus_edges_cluster_{cluster}.tsv', header=None, sep='\t')
+            edges_padj = pd.read_csv(f'{path}/results/{scores_type[1]}/consensus_edges_cluster_{cluster}.tsv', header=None, sep='\t')
+            edges_temp = pd.merge(edges_lfc, edges_padj, on=[0, 1])
+            if not edges_temp.isin([perb_gene]).any().any(): interactor_perb = True
+            edges_consensus = edges_temp.values.tolist()
+            
+            # Finding and annotating connected components (subnetworks)
+            G = nx.Graph()
+            G.add_edges_from(edges_consensus)
+            subnets = list(nx.connected_components(G))
+            subnets_dict = {i: list(component) for i, component in enumerate(subnets)}
+            gprofiler_df = path_gprofiler(subnets_dict, 0)
+            gprofiler_df.to_csv(f'./results/path_gprofiler_cluster_{cluster}.csv', index=None)
+            
+            # Creating big interaction network
+            nodes_dict = dict(zip(nodes_raw['shared name'], nodes_raw['display name']))
+            edges_significant = edges_raw['shared name'].str.split(expand=True)[[0, 2]].replace(nodes_dict)
+            edges_significant = list(zip(list(edges_significant[0]), list(edges_significant[2])))
+            G = nx.Graph()
+            G.add_edges_from(edges_significant)
+    
+            # Finding shortest paths between subnetworks
+            source_subnets = list(subnets_dict.keys())[:-1]
+            target_subnets = list(subnets_dict.keys())
+            interactor_nodes = []
+            for source_key in source_subnets:
+                target_subnets.remove(source_key)
+                for target_key in target_subnets:
+                    shortest_paths, shortest_length = [], float('inf')
+                    for gene_1 in subnets_dict[source_key]:
+                        for gene_2 in subnets_dict[target_key]:
+                            if nx.has_path(G, gene_1, gene_2):
+                                path = nx.shortest_path(G, source=gene_1, target=gene_2)
+                                path_length = len(path)
+                                if path_length < shortest_length:
+                                    shortest_paths = [path]
+                                    shortest_length = path_length
+                                elif path_length == shortest_length:
+                                    shortest_paths.append(path)
+            
+                    # Adding new edges between subnetworks
+                    for path in shortest_paths:
+                        for i in range(len(path) - 1):
+                            if not i == 0 and not path[i] in interactor_nodes: interactor_nodes.append(path[i])
+                            if path[i] < path[i + 1] and not [path[i], path[i + 1]] in edges_consensus: edges_consensus.append([path[i], path[i + 1]])
+                            elif path[i] > path[i + 1] and not [path[i + 1], path[i]] in edges_consensus: edges_consensus.append([path[i + 1], path[i]])
+
+            # Adding perturb gene if not present in subnetworks
+            if interactor_perb and not perb_gene in interactor_nodes:
+                interactor_nodes.append(perb_gene)
+                edges_perb = list(G.edges(perb_gene))
+                for path in edges_perb:
+                    path = list(path)
+                    if path[0] != perb_gene: index = 0
+                    else: index = 1
+                    if path[index] in edges_temp or path[index] in interactor_nodes:
+                        if path[0] < path[1]: edges_consensus.append(path)
+                        else: edges_consensus.append(list(reversed(path)))
+            
+            # Saving consensus edges with added interactors
+            path = './results/hotnet_output'
+            edges_consensus = pd.DataFrame(edges_consensus, columns = ['genes names 1', 'genes names 2'])
+            edges_consensus['interaction'] = 'pp'
+            edges_consensus.to_csv(f'{path}/results/consensus_edges_cluster_{cluster}.csv', index=None)
+            interactor_nodes = pd.DataFrame(index=interactor_nodes)
+            interactor_nodes['interactor'] = 'yes'
+            interactor_nodes.index.name = 'genes names'
+            interactor_nodes.to_csv(f'{path}/results/consensus_interactors_cluster_{cluster}.csv')
+    
+            # Plotting cluster heat map
+            x = 2
+            heat_map = sns.clustermap(cluster_df.transpose(), row_cluster=True, col_cluster=False, figsize=(20,20),cmap='bwr', vmin=-x,vmax=x,
+                                      cbar_pos=(0.75, 0.85, 0.15, 0.05), cbar_kws={'orientation':'horizontal', "label": "LFC value", 'ticks':[-x,0,x]})
+            heat_map.ax_heatmap.set_xlabel('Variants')
+            heat_map.ax_heatmap.set_ylabel('Genes')
+            plt.show()
+    
+            # Calculating coefficient of variation
+            mean_series = cluster_df.mean(axis=0)
+            std_series = cluster_df.std(axis=0)
+            cv_series = ((std_series / mean_series) * 100).abs().round(decimals=2)
+            cv_df = pd.DataFrame(cv_series[cv_series > 30], columns=['CV']).sort_values(by='CV', ascending=False)
+            cv_df['Significant counts'] = sign_counts
+            print('%i genes of %i genes with CV > 30%%' % (len(cv_df.index), len(cv_series)))
+            display(cv_df.transpose())
+
+    print(f'CSV files saved in {path}/results/')
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
 
 
 ########## PATHWAY ENRICHMENT ANALYSIS ##########
 
 
-def path_gprofiler(data, cond):  # data is the AnnData object obtained from louvain_genes function, or the CSV file obtained from hotnet_analysis function,
-                                 # and cond is a string ('adata' or 'subnetwork_cluster_*' where * is the variants cluster number) to indicate data object type
+def path_gprofiler(genes_dict, verbosity=1):  # genes_dict is a dict whose keys are the cluster numbers, and values are list of genes
+                                              # verbosity is a number that if different of 0 additional detail are displayed on screen
     """Pathway enrichment analysis (GO and KEGG) with gprofiler library"""
     start_time = time.time()
                               
-    # Generating cluster of genes
-    genes_list = []
-    cluster_list = []
-    if cond == 'adata':
-        cluster_list = list(data.var['louvain'])
-        genes_list = list(data.var['var_names'])
-    elif 'subnetwork_cluster_' in cond:
-        for row in data.index:
-            genes_temp = list(data.loc[row].dropna())
-            genes_list += genes_temp
-            cluster_list += [row for i in range(len(genes_temp))]
-    else: raise ValueError(f'{cond} is not a valid parameter. Write \'adata\' or \'subnetwork_cluster_*\', where * is the variants cluster number.')
-
     # Running enrichment analysis
-    result_cl = ['native', 'name', 'p_value', 'term_size', 'query_size', 'intersection_size', 'effective_domain_size', 'precision', 'recall', 'intersections', 'cluster']
+    result_cl = ['native', 'name', 'p_value', 'term_size', 'query_size', 'intersection_size', 'effective_domain_size', 'precision', 'recall', 'intersections', 'group']
     result_df = pd.DataFrame(columns=result_cl)
     gp = GProfiler(return_dataframe=True)
-    for cluster_num in set(cluster_list):
-        print(f'Running enrichment analysis in cluster {cluster_num}...')
-        cluster_genes = [gene for gene, cluster in zip(genes_list, cluster_list) if cluster == cluster_num]
-        result_temp = gp.profile(organism='hsapiens', query=cluster_genes, sources=['KEGG', 'GO:BP'], no_evidences=False)
-        result_temp['cluster'] = [cluster_num for i in range(len(result_temp.index))]
+    for cluster_num, genes_list in genes_dict.items():
+        if verbosity != 0: print(f'Running enrichment analysis in group {cluster_num}...')
+        result_temp = gp.profile(organism='hsapiens', query=genes_list, sources=['KEGG', 'GO:BP'], no_evidences=False)
+        result_temp['group'] = [cluster_num for i in range(len(result_temp))]
         result_df = pd.concat([result_df, result_temp[result_cl]]).reset_index(drop=True)
     
-    display(result_df)
-    result_df.to_csv(f'./results/path_gprofiler_{cond}.csv', index=None)
-    print("Execution time:", round(time.time() - start_time, 3), "seconds")
+    if verbosity != 0:
+        display(result_df)
+        print("Execution time:", round(time.time() - start_time, 3), "seconds")
     return result_df  # Return dataframe with GO and KEGG annotations of each cluster
