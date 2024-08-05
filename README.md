@@ -1,10 +1,6 @@
-Single-cell RNA sequencing (scRNA-seq) data from perturb-seq experiments aims to investigate the functional impact of genetic variants in cancer. However, the phenotypic impact is complex and may not result in distinct clusters. Instead, the functional impact may manifest as a spectrum of gene expression changes; variants with similar expression profiles can be clustered together capturing the complexity of biological systems more effectively than single comparison approaches.  
+This project introduces a comprehensive pipeline that compares and integrates various bioinformatics tools and methodologies derived from extensive bibliographic research that leverages high-throughput results from Perturb-seq experiments to perform differential gene expression and retrieve complex altered PPi subnetworks from STRING database using an implementation of the Hierarchical HotNet algorithm (fig. 1). The pipeline demonstrates excellent performance, successfully distinguishes impactful variants, identifies variants with similar expression profiles, and shows promising results for retrieving key affected modules already observed in KRAS and TP53 variants. These promising results indicate the potential of the Perturb-seq approach to become a standard strategy for uncovering not only common significantly expressed genes, but also interactors that could be targeted in future therapeutic strategies.  
 
-Later, using network algorithms, such as the Diffuse tool in Cytoscape (propagation of biological signals) or HotNet (statistic significant of resulting subnetworks) among others, the goal is to identify pairs of genes that exhibit closer relationships or functional associations, providing insights into gene function, regulatory mechanisms, and disease pathways.  
-
-Regular updates on the status of the project are pushed to this GitHub repository; the analysis pipeline starts with a Python implementation (perturbseq_analysis.py) that incorporates additional features such as data filtering, clustering, and pathway annotation for analysing any kind of raw counts matrices obtained from any perturb-seq experiment.  
-
-*Check the [analysis pipeline image](#Analysis-pipeline) and the [updates section](#Updates) to check the development status of this project.  
+*Check the [analysis pipeline image](#Analysis-pipeline) and the [updates section](#Updates) for the current development status.  
 
 
 # Installation
