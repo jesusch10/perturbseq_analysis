@@ -95,8 +95,8 @@ def filter_data(matrix, var_names, obs_names, mt_names, batch_nums):       # mat
     sc.pp.filter_cells(adata, min_genes=200)
 
     # Filtering genes present in <3 cells
-    print('Filtering genes present in <3 cells')
-    sc.pp.filter_genes(adata, min_cells=3)
+    print('Filtering genes present in <5% of cells')
+    sc.pp.filter_genes(adata, min_cells=adata.obs.shape[0]*0.05)
 
     # Normalizing data and filtering lowest variable genes
     print('Normalizing data and filtering lowest variable genes...')
@@ -242,7 +242,7 @@ def compare_groups(adata, reference):  # adata is the normalized AnnData object 
         thresh = float(list(fdr_passed[method])[0])
         
         plt.axvline(x=thresh,color='black',linestyle='dotted')
-        plt.title('FDR 0.01 - Threshold %.2f' % thresh)
+        plt.title('FDR 0.05 - Threshold %.2f' % thresh)
         plt.legend()
         plt.savefig('./results/fdr_%s.png' % method, dpi=150)
         plt.show()
@@ -253,13 +253,13 @@ def compare_groups(adata, reference):  # adata is the normalized AnnData object 
 
 
 def plot_dendogram(adata, reference, scoring_df, h2_thresh, color_thresh):    # adata is the normalized AnnData object obtained from filter_data function,
-    """Hierarchical dendogram based on Pearson scores,"""                     # reference is a string with the name of the reference group,
+    """Hierarchical dendogram based on Spearman scores,"""                    # reference is a string with the name of the reference group,
     """hierarchical clustering based on visual inspection changing"""         # scoring_df is the dataframe obtained from compare_groups() function,
     """the threshold parameter, and plotting the heat map"""                  # h2_thresh is the HotellingT2 threshold obtained in compute_fdr() function,
     start_time = time.time()                                                  # color_thresh is a float number to change as desired the number of clusters in the dendogram
 
     # Hierarchical clustering
-    distance_matrix = 1 - scoring_df['bulk.pearson'].abs().values.reshape(-1, 1)
+    distance_matrix = 1 - scoring_df['bulk.spearman'].abs().values.reshape(-1, 1)
     Z = hierarchy.linkage(distance_matrix, method='average')
     scoring_df['cluster'] = hierarchy.fcluster(Z, t=color_thresh, criterion='distance')
     scoring_df.to_csv('./results/scoring_df.csv', index=None)
@@ -310,52 +310,52 @@ def plot_dendogram(adata, reference, scoring_df, h2_thresh, color_thresh):    # 
     return scoring_df  # scoring_df now contains a 'cluster' column indicating the group in which the variant is placed
 
 
-########## LOUVAIN ANALYSIS ##########
+########## LEIDEN ANALYSIS ##########
 
 
-def louvain_clustering(adata, n_pcs, resolution):  # adata is the normalized AnnData object obtained from previous functions
+def leiden_clustering(adata, n_pcs, resolution):   # adata is the normalized AnnData object obtained from previous functions
                                                    # n_pcs is the integer number of Principal Components to use for clustering
                                                    # resolution is a float number to change as desired the number of resulting clusters
-    """Louvain clustering of cells and genes, and calculate the variant presence (%) in each louvain group"""
+    """Leiden clustering of cells and genes, and calculate the variant presence (%) in each leiden group"""
     start_time = time.time()
 
     # Clustering cells
     print('Clustering cells...')
     sc.pp.neighbors(adata, n_pcs=n_pcs)
-    sc.tl.louvain(adata, key_added='louvain', resolution=resolution)
+    sc.tl.leiden(adata, key_added='leiden', resolution=resolution)
     sc.tl.umap(adata)
-    sc.pl.umap(adata, color=['louvain'], s=1, save = '.png')
-    os.system('mv ./figures/umap.png ./results/louvain_cells.png')
+    sc.pl.umap(adata, color=['leiden'], s=1, save = '.png')
+    os.system('mv ./figures/umap.png ./results/leiden_cells.png')
     os.system('rm -r ./figures')
 
-    # Calculate variant presence (%) in each louvain group
+    # Calculate variant presence (%) in each leiden group
     obs_names = adata.obs['obs_names']
-    result_df = pd.DataFrame(index = list(set(obs_names)), columns = range(len(set(adata.obs['louvain']))))
+    result_df = pd.DataFrame(index = list(set(obs_names)), columns = range(len(set(adata.obs['leiden']))))
     for variant in result_df.index:
-        cluster_nums = [num for flag, num in zip(obs_names == variant, adata.obs['louvain']) if flag]
-        for cluster in set(adata.obs['louvain']):
+        cluster_nums = [num for flag, num in zip(obs_names == variant, adata.obs['leiden']) if flag]
+        for cluster in set(adata.obs['leiden']):
            result_df.loc[variant, int(cluster)] = round((np.count_nonzero(pd.Index(cluster_nums) == cluster) / len(cluster_nums)) * 100, 2)
-    print('Variant presence (%) in each louvain group:')
+    print('Variant presence (%) in each leiden group:')
     display(result_df)
-    result_df.to_csv('./results/louvain_cells.csv')
+    result_df.to_csv('./results/leiden_cells.csv')
     
     # Transpose and clustering genes
     print('Clustering genes...')
     adata = adata.transpose()
     sc.pp.neighbors(adata)
-    sc.tl.louvain(adata, key_added='louvain')
+    sc.tl.leiden(adata, key_added='leiden')
     sc.tl.umap(adata)
-    sc.pl.umap(adata, color=['louvain'], s=5, save = '.png')
-    os.system('mv ./figures/umap.png ./results/louvain_genes.png')
+    sc.pl.umap(adata, color=['leiden'], s=5, save = '.png')
+    os.system('mv ./figures/umap.png ./results/leiden_genes.png')
     os.system('rm -r ./figures')
-    print('Number of genes in each louvain group:')
-    display(adata.obs['louvain'].value_counts())
+    print('Number of genes in each leiden group:')
+    display(adata.obs['leiden'].value_counts())
     adata = adata.transpose()
 
     with open('./results/normalized_data.pkl', 'wb') as file:
         pkl.dump(adata, file)
     print("Execution time:", round(time.time() - start_time, 3), "seconds")
-    return adata  # adata is an AnnData object obtained from louvain clustering
+    return adata  # adata is an AnnData object obtained from Leiden clustering
 
 
 def var_umap(adata):  # adata is the AnnData object obtained from previous functions
@@ -370,7 +370,8 @@ def var_umap(adata):  # adata is the AnnData object obtained from previous funct
 ########## DIFFERENTIAL EXPRESSION ANALYSIS (DEA) ##########
 
 
-def diff_analysis(adata):  # adata is the non-normalized AnnData object obtained from the filter_data() function
+def diff_analysis(adata, reference):  # adata is the non-normalized AnnData object obtained from the filter_data() function
+                                      # reference is a string with the name of the reference group
     """Differential expression analysis (DEA) with the library PyDESeq2, a Python implementation of the DESeq2 method in R"""
     start_time = time.time()
     
@@ -380,7 +381,7 @@ def diff_analysis(adata):  # adata is the non-normalized AnnData object obtained
     if not os.path.exists('./results/diff_analysis'): os.mkdir('./results/diff_analysis')
     
     for variant in set(adata.obs['obs_names']):
-        if variant not in ['WT', 'Null']:
+        if variant != wt_var:
             # Selecting variants
             adata_temp = adata[adata.obs['obs_names'].isin(['WT', variant])]
             adata_temp.obs.reset_index(drop=True, inplace=True)
