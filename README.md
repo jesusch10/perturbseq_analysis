@@ -152,7 +152,7 @@ It returns a dataframe with GO and KEGG annotations of each cluster (also saved 
 
 
 # Example:
-Find in the `example*` folders of this repository the Jupyter Notebook `perturbseq_example.ipynb`. It executes all functions of `perturbseq_analysis.py` with data recovered from the study 'Massively parallel phenotyping of coding variants in cancer with Perturb-seq' (https://doi.org/10.1038/s41587-021-01160-7). All expected outputs are saved in `example*/results/` folder, except AnnData objects from checkpoints (too big). 
+Find in the `example*` folders of this repository the Jupyter Notebook `perturbseq_example.ipynb`. It executes all functions of `perturbseq_analysis.py` with the raw counts extracted from Gene Expression Omnibus [GSE161824](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE161824). All expected outputs are saved in `example*/results/` folder, except AnnData objects from checkpoints (too big). 
 
 
 # Requirements
