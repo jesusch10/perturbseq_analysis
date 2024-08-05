@@ -8,7 +8,7 @@ Regular updates on the status of the project are pushed to this GitHub repositor
 
 
 # Installation
-Make sure that `perturbseq_analysis.py` and `hotnet` folder are in the same directory as the Jupyter Notebook you shall create to execute the functions.  
+Make sure that `perturbseq_analysis.py` and `hotnet` folder are in the same directory as the Jupyter Notebook you shall create to execute the functions. Executable only in Linux.  
 
 
 # Functions
@@ -19,8 +19,8 @@ import perturbseq_analysis as pseq
 - [Hierarchies analysis](#Hierarchies-analysis)
   - [Comparing variants expression profiles](#Comparing-variants-expression-profiles)
   - [Hierarchical dendogram and clustering](#Hierarchical-dendogram-and-clustering)
-- [Louvain analysis](#Louvain-analysis)
-  - [Louvain clustering](#Louvain-clustering)
+- [Leiden analysis](#Leiden-analysis)
+  - [Leiden clustering](#Leiden-clustering)
   - [UMAP by variants](#UMAP-by-variants)
 - [Differential expression analysis (DEA)](#Differential-expression-analysis-DEA)
   - [Running DEA](#Running-DEA)
@@ -35,7 +35,7 @@ import perturbseq_analysis as pseq
 · Downsampling cells with >(`input user 2`) counts to <=(`ìnput user 2`) counts.  
 · Batch effect correction by a downsampling factor (`input user 3`).  
 · Removing cells with <(`input user 1`) counts, cells with >20% mitochondrial counts, cells with <200 genes.  
-· Removing genes present in <3 cells, and lowest variable (0.0125 as minimum mean expression, 4 as maximum mean expression, and 0.4 as the minimum dispersion levels).  
+· Removing genes present in <5% cells, and lowest variable (0.0125 as minimum mean expression, 4 as maximum mean expression, and 0.4 as the minimum dispersion levels).  
 . Plotting the fraction of counts assigned to each 20% most highly variable gene over all cells (also saved in `./results/filter_data_variable_genes.png`), and the total counts of cells VS the number of genes whose points are colored by the percentage of mitochondrial counts (also saved in `./results/filter_data_counts.png`).  
 · Normalizing, log-transforming, calculating to z-scores, and running Principal Component Analysis (PCs ranking is plotted and saved in `./results/filter_data_pca.png`).
 ```
@@ -61,7 +61,7 @@ scoring_df = pseqcompare_groups(adata_nor, reference)
 It returns a dataframes of metric scores calculated for each variant VS reference group.  
 
 ### Hierarchical dendogram and clustering:
-Hierarchical dendogram based on Pearson scores, hierarchical clustering based on visual inspection changing the threshold parameter, and plotting the heat map.
+Hierarchical dendogram based on Spearman correlation, hierarchical clustering based on visual inspection changing the threshold parameter, and plotting the heat map.
 ```
 scoring_df = pseq.plot_dendogram(adata_nor, reference, scoring_df, h2_thresh, color_thresh)
 
@@ -73,20 +73,20 @@ scoring_df = pseq.plot_dendogram(adata_nor, reference, scoring_df, h2_thresh, co
 ```
 It returns the same dataframe now containing the `cluster` column indicating the group in which the variant is placed.  
 
-## Louvain analysis:
-### Louvain clustering:
-It displays two UMAP plots (louvain clusters of cells, and louvain clusters of genes), and a dataframe with the variant presence (%) in each louvain group (all saved in `./results/`).
+## Leiden analysis:
+### Leiden clustering:
+It displays two UMAP plots (leiden clusters of cells, and leiden clusters of genes), and a dataframe with the variant presence (%) in each leiden group (all saved in `./results/`).
 ```
-adata_nor = pseq.louvain_clustering(adata_nor, n_pcs, resolution)
+adata_nor = pseq.leiden_clustering(adata_nor, n_pcs, resolution)
 
 # adata_nor is the normalized AnnData object obtained from filter_data() function
 # n_pcs is the integer number of Principal Components to use for clustering
 # resolution is a float number to change as desired the number of resulting clusters
 ```
-It returns an AnnData object obtained from louvain clustering (CHECKPOINT: also saved in `./results/normalized_data.pkl`).  
+It returns an AnnData object obtained from leiden clustering (CHECKPOINT: also saved in `./results/normalized_data.pkl`).  
 
 ### UMAP by variants:
-Plot UMAP of each variant against the wild type (WT) (all also saved in `./results/var_umap/`).
+Plot UMAP of each variant against the Wild Type (WT) (all also saved in `./results/var_umap/`).
 ```
 pseq.var_umap(adata)
 
@@ -150,9 +150,9 @@ It returns a dataframe with GO and KEGG annotations of each cluster (also saved 
 
 
 # Updates:
-· Function `hotnet_analysis()` now uses LFC values (transformed to absolute scores) and q-values (transformed to logarithmic scale of 10) as scores, and creates two groups (one per type of score) of significantly altered consensus subnetworks per cluster of variants.  
-· Function `lfc_cluster()` now is called `clusnet_analysis()`, and conserves previous tasks, not to create a new network of just significantly expressed genes, but to process the output of hotnet_analysis() function by performing consensus (intersection) of the two groups (one per type of score) significantly altered consensus subnetworks per cluster of variants.  
-· Function `path_gprofiler()` now takes a dict of cluster of genes, and verbosity can be controlled.  
+· Function `filter_data()`: removing genes present in <5% cells instead of <3 cells.  
+· Function `plot_dendogram()`: calculating Spearman correlation instead of Pearson correlation.  
+· Function `leiden_clustering()`: implementing Leiden algorithm instead of Louvain algorithm (function `louvain_clustering()` deprecated).  
 
 
 # Example:
